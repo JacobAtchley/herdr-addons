@@ -6,27 +6,29 @@ a tab bar that ties them together.
 
 ## What's here
 
-| Mod | Key | What it does |
+Each folder is one addon, with its own `RECIPE.md` (a full description another
+agent can rebuild it from), a `preview.png`, its mods, and its keys.
+
+| Addon | Key | What it does |
 |---|---|---|
-| `ado-prs` | `⌘⇧R` | Every active pull request in your Azure DevOps org, grouped by project. All / Mine / To review filters, search, vote summary, "Review with Claude Code", copy a Slack message. |
-| `ado-pipelines` | `⌘⇧B` | Recent pipeline runs across all projects. Click a run for its stages, jobs and tasks, plus a highlighted task log. Running jobs refresh on their own. |
-| `ado-workitems` | `⌘⇧I` | Work items assigned to you (or to others), grouped by project or assignee. A `#id` lookup box, a Details view where you can edit rich fields and comments, and "Refine with Claude Code". |
-| `ado-standup` | `⌘⇧Y` | One team's standup: what got done, PRs waiting on review, new work, impediments, failed builds, production deploys. |
-| `ado-menu` | — | The ADO dropdown in the tab bar. |
-| `dd-attention` | `⌘⇧E` | What needs attention in one Datadog env: triggered monitors, Error Tracking issues, clustered error logs, APM error spans. |
-| `dd-menu` | — | The Datadog dropdown in the tab bar. |
-| `cc-usage` | `⌘⇧U` | Claude Code usage like ccusage: cost and tokens by day, model, repo, branch and session, the live 5-hour block, and your plan limits. |
-| `agent-board` | `⌘⇧A` | Your agents as a kanban board, with one column per status. |
-| `agent-village` | — | Your agents as villagers on a pixel-art map. Used by the `village` layout. |
-| `orch`, `orch-menu`, `orch-sidebar` | — | Inbox for a local agent-orchestrator daemon: sessions, plan and permission approvals, PR review queue. Needs an orchestrator API at `orchestrator.url` (see Settings). |
-| `pane-next`, `pane-prev` | `⌃⇥` / `⌃⇧⇥` | Cycle panes across every space, not just the current tab. |
-| `tools-menu` | — | The Tools dropdown in the tab bar. Its entries (`git-glance`, `project-runner`) come from [herdr-plugins](https://github.com/JacobAtchley/herdr-plugins). |
-| `my-tabs` | — | A copy of herdr's tab bar with the Usage, Tools, ADO, Orchestrator and Datadog buttons added. Used by the `my-main` layout. |
+| [**azure-devops**](azure-devops/RECIPE.md) | `⌘⇧R` `⌘⇧B` `⌘⇧I` `⌘⇧Y` | Pull requests, pipelines (with logs), work items (with an editable details view) and a team standup, for every project in your Azure DevOps org. An ADO dropdown in the tab bar opens them. |
+| [**datadog**](datadog/RECIPE.md) | `⌘⇧E` | What needs attention in one Datadog env: triggered monitors, Error Tracking issues, clustered error logs, APM error spans. |
+| [**cc-usage**](cc-usage/RECIPE.md) | `⌘⇧U` | Claude Code usage like ccusage: cost and tokens by day, model, repo, branch and session, the live 5-hour block, and your plan limits. |
+| [**orchestrator**](orchestrator/RECIPE.md) | — | Inbox for a local agent-orchestrator daemon: sessions, plan and permission approvals, PR review queue, plus a sidebar list. Needs an orchestrator API at `orchestrator.url`. |
+| [**agent-board**](agent-board/RECIPE.md) | `⌘⇧A` | Your agents as a kanban board with one column per status, plus a `board` layout. |
+| [**agent-village**](agent-village/RECIPE.md) | — | Your agents as villagers on a pixel-art map, in the `village` layout. |
+| [**pane-cycle**](pane-cycle/RECIPE.md) | `⌃⇥` `⌃⇧⇥` | Cycle panes across every space and tab, not just the current one. |
+| [**my-main**](my-main/RECIPE.md) | — | Layout: herdr's main layout with a tab bar holding Usage, Tools, ADO, Orchestrator and Datadog buttons, and an Orchestrator list in the sidebar. Uses the addons above; the Tools entries come from [herdr-plugins](https://github.com/JacobAtchley/herdr-plugins). |
 
-**Layouts:** `my-main` (herdr's main layout with `my-tabs` and an Orchestrator
-list in the sidebar), `board` (agent board above a terminal), `village`.
+<table>
+<tr><td><img src="azure-devops/preview.png" alt="Azure DevOps"></td><td><img src="cc-usage/preview.png" alt="Claude Code usage"></td></tr>
+<tr><td><img src="orchestrator/preview.png" alt="Orchestrator"></td><td><img src="datadog/preview.png" alt="Datadog"></td></tr>
+<tr><td><img src="agent-board/preview.png" alt="Agent board"></td><td><img src="agent-village/preview.png" alt="Agent village"></td></tr>
+</table>
 
-**Themes:** `catppuccin` (Mocha, dark) and `catppuccin-latte` (light).
+The screenshots use made-up data.
+
+**Themes:** `themes/` has `catppuccin` (Mocha, dark) and `catppuccin-latte` (light).
 
 ## Requirements
 
@@ -42,8 +44,8 @@ list in the sidebar), `board` (agent board above a terminal), `village`.
 ```sh
 git clone https://github.com/JacobAtchley/herdr-addons ~/code/herdr-addons
 cd ~/code/herdr-addons
-./install.sh                    # every mod
-./install.sh ado-prs cc-usage   # or only some
+./install.sh                         # every addon
+./install.sh azure-devops cc-usage   # or only some (addon or mod names)
 ```
 
 `install.sh` never overwrites anything you already have:
@@ -52,7 +54,7 @@ cd ~/code/herdr-addons
   herdr won't load a mod's icons through a symlink.
 - Layouts and themes are copied over, unless you already have a file with that name.
 - `addons.json` (your settings) is created from `addons.example.json` if you don't have one.
-- Keys from `keys.json` are added to yours. A key you already use is left alone
+- Each addon's `keys.json` is added to yours. A key you already use is left alone
   and listed, so you can pick another one.
 
 **To update** after a `git pull`, run `./install.sh --update`. It refreshes the

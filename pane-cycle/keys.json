@@ -1,0 +1,6 @@
+{
+  "global": {
+    "ctrl-tab": "mod.open:pane-next",
+    "ctrl-shift-tab": "mod.open:pane-prev"
+  }
+}
