@@ -1,0 +1,13 @@
+{
+  "global": {
+    "ctrl-tab": "mod.open:pane-next",
+    "ctrl-shift-tab": "mod.open:pane-prev",
+    "cmd-shift-a": "mod.open:agent-board",
+    "cmd-shift-u": "mod.open:cc-usage",
+    "cmd-shift-r": "mod.open:ado-prs",
+    "cmd-shift-b": "mod.open:ado-pipelines",
+    "cmd-shift-i": "mod.open:ado-workitems",
+    "cmd-shift-y": "mod.open:ado-standup",
+    "cmd-shift-e": "mod.open:dd-attention"
+  }
+}

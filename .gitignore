@@ -1,0 +1,7 @@
+# Written by herdr's gpui-shell for editor typing; regenerated per machine.
+gpui-kit.d.ts
+__pycache__/
+*.pyc
+.DS_Store
+# Personal settings live in the herdr-app folder, never here.
+addons.json

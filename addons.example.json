@@ -1,0 +1,22 @@
+{
+  "claude": {
+    "model": "opus",
+    "models": { "review": "opus", "refine": "opus", "resume": "opus" },
+    "folder": "~/code"
+  },
+  "ado": {
+    "org": "my-org",
+    "standup": {
+      "project": "MyProject",
+      "team": "My Team",
+      "blockTags": ["Blocked", "Impediment", "external-dependency"]
+    }
+  },
+  "datadog": {
+    "env": "prod"
+  },
+  "orchestrator": {
+    "url": "http://127.0.0.1:8490",
+    "dashboard": "http://localhost:8490"
+  }
+}

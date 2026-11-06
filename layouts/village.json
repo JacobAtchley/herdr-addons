@@ -1,0 +1,31 @@
+{
+  "id": "root",
+  "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [16, 10],
+  "background": "#2c5a22",
+  "terminal_padding": [14, 10],
+  "preview": "layouts/village.png",
+  "children": [
+    {
+      "id": "village",
+      "type": "block",
+      "size": { "px": 482 },
+      "min": 200,
+      "window_drag": true,
+      "content": { "mod": "agent-village", "props": { "layout": true } }
+    },
+    {
+      "id": "dialog",
+      "type": "block",
+      "size": { "weight": 1 },
+      "min": 120,
+      "padding": [8, 12],
+      "background": "#2c5a22",
+      "colors": { "background": "#1b1530" },
+      "content": { "agent": "focused" },
+      "border": { "width": 3, "color": "#e8d6a8" },
+      "radius": 8
+    }
+  ]
+}

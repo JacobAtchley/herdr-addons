@@ -1,0 +1,28 @@
+{
+  "id": "root",
+  "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [16, 16],
+  "background": "canvas",
+  "terminal_padding": [14, 12],
+  "preview": "layouts/board.svg",
+  "divider": { "width": 1, "color": "border" },
+  "children": [
+    {
+      "id": "board",
+      "type": "block",
+      "size": { "weight": 2 },
+      "min": 160,
+      "window_drag": true,
+      "content": { "mod": "agent-board", "props": { "layout": true } }
+    },
+    {
+      "id": "agent",
+      "type": "block",
+      "size": { "weight": 3 },
+      "min": 120,
+      "background": "background",
+      "content": { "agent": "focused" }
+    }
+  ]
+}
