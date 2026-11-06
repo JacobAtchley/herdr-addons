@@ -32,7 +32,7 @@ if [ "$MODE" = pull ]; then
   for m in "${MODS[@]}"; do
     src="$HOME_DIR/mods/$m"
     [ -d "$src" ] || { echo "skip $m: not installed"; continue; }
-    rsync -a --delete "${SKIP[@]}" --exclude jsconfig.json "$src/" "$REPO/mods/$m/"
+    rsync -a --checksum --delete "${SKIP[@]}" --exclude jsconfig.json "$src/" "$REPO/mods/$m/"
     echo "pull $m"
   done
   git -C "$REPO" status --short
@@ -48,7 +48,7 @@ for m in "${MODS[@]}"; do
   fi
   if [ -e "$dst" ]; then
     if [ "$MODE" = update ]; then
-      rsync -a "${SKIP[@]}" --exclude jsconfig.json "$src/" "$dst/"
+      rsync -a --checksum "${SKIP[@]}" --exclude jsconfig.json "$src/" "$dst/"
       echo "upd  $m"
     else
       echo "skip $m: already installed (--update refreshes it)"
@@ -57,7 +57,7 @@ for m in "${MODS[@]}"; do
   fi
   # mod.json must land before main.js, or herdr may dock a half-copied mod.
   mkdir -p "$dst" && cp "$src/mod.json" "$dst/"
-  rsync -a "${SKIP[@]}" "$src/" "$dst/"
+  rsync -a --checksum "${SKIP[@]}" "$src/" "$dst/"
   echo "add  $m"
 done
 
