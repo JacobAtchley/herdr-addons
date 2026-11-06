@@ -42,18 +42,24 @@ list in the sidebar), `board` (agent board above a terminal), `village`.
 ```sh
 git clone https://github.com/JacobAtchley/herdr-addons ~/code/herdr-addons
 cd ~/code/herdr-addons
-./install.sh                 # every mod
+./install.sh                    # every mod
 ./install.sh ado-prs cc-usage   # or only some
 ```
 
 `install.sh` never overwrites anything you already have:
 
-- Each mod is **symlinked** into `~/.config/herdr-app/mods/`, so a `git pull`
-  updates it live. Use `./install.sh --copy` to copy the mods instead.
+- Each mod is **copied** into `~/.config/herdr-app/mods/`. Don't symlink mods:
+  herdr won't load a mod's icons through a symlink.
 - Layouts and themes are copied over, unless you already have a file with that name.
 - `addons.json` (your settings) is created from `addons.example.json` if you don't have one.
 - Keys from `keys.json` are added to yours. A key you already use is left alone
   and listed, so you can pick another one.
+
+**To update** after a `git pull`, run `./install.sh --update`. It refreshes the
+mods you already have; your `addons.json` and keys are left as they are.
+
+**To send changes back:** if you edit mods inside herdr, run
+`./install.sh --pull` to copy them into the repo, then review the diff and commit.
 
 Set `HERDR_HOME` if your herdr-app folder is somewhere else. To use the layouts,
 switch to them with `⌘⇧L`. To uninstall a mod, delete
@@ -147,8 +153,8 @@ Keychain (`Claude Code-credentials`) and only sends it to Anthropic's usage endp
 - **Theme:** `"theme": { "light": "catppuccin-latte", "dark": "catppuccin" }` in
   herdr's `settings.json` follows the system's light or dark mode.
 - **Constants** at the top of each `main.js` (refresh intervals, how far back
-  lists go, row caps) are meant to be edited. A symlinked install picks up your
-  changes live.
+  lists go, row caps) are meant to be edited. `./install.sh --pull` copies
+  your edits back into the repo.
 
 ## Notes
 
