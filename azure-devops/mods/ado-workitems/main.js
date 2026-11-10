@@ -117,11 +117,12 @@ export default class AdoWorkItems extends View {
       // A save: patch the item in whichever lists hold it.
       updated: (fields) => {
         const it = toItem(fields);
+        if (it.id == null) return; // fields without System.Id can't be matched to a row
         for (const d of Object.values(this.data)) {
           const i = (d.items ?? []).findIndex((x) => x.id === it.id);
           if (i >= 0) d.items[i] = it;
         }
-        if (this.lookup?.item?.id === it.id) this.lookup.item = it;
+        if (this.lookup?.item && this.lookup.item.id === it.id) this.lookup.item = it;
       },
       chrome: (t) => this.chrome(t, { detail: this.detail?.id }),
     };

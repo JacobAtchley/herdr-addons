@@ -1,6 +1,7 @@
 // Azure DevOps pull requests: every active PR in the organization, across all
 // projects, from one org-level REST call (`az rest`, so it uses the az login).
 // Grouped by project; filter All / Mine / To review / Pending, search, click to open.
+// The PR id box looks up any one PR by id, including closed or older ones.
 //
 // Opens as a dialog (mod.open:ado-prs), or as a pane beside a shell.
 
@@ -53,6 +54,8 @@ const QUERY =
   "value[].{id:pullRequestId,title:title,draft:isDraft,created:creationDate,source:sourceRefName,target:targetRefName," +
   "merge:mergeStatus,repo:repository.name,repoId:repository.id,project:repository.project.name,author:createdBy.displayName," +
   "authorMail:createdBy.uniqueName,reviewers:reviewers[].{name:displayName,mail:uniqueName,vote:vote,group:isContainer,required:isRequired}}";
+// The same fields for one PR from the by-id call, plus its status (active, completed, abandoned).
+const ONE_QUERY = QUERY.replace(/^value\[\]\.\{/, "{status:status,");
 
 const AZ = ["az", "/opt/homebrew/bin/az", "/usr/local/bin/az"];
 
@@ -92,6 +95,12 @@ export default class AdoPrs extends View {
     this.threads = {}; // pr id → { resolved, open }
     this.search = InputState.new({ placeholder: "Filter by title, repo, author, branch…" });
     this.search.on("change", (_e, cx) => cx.notify());
+    this.lookup = null; // { id, loading } | { id, pr } | { id, error }
+    this.idBox = InputState.new({ placeholder: "PR id ↵" });
+    this.idBox.on("submit", (_e, cx) => this.find(cx));
+    this.idBox.on("change", (_e, cx) => {
+      if (!this.idBox.value().trim() && this.lookup) { this.lookup = null; cx.notify(); }
+    });
     this.refresh(cx);
     cx.timer.every(REFRESH_MS, (cx) => this.refresh(cx));
   }
@@ -102,13 +111,7 @@ export default class AdoPrs extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        if (!this.org) this.org = (await addonSettings()).ado?.org || null;
-        if (!this.org) {
-          const cfg = await az(["devops", "configure", "-l"]);
-          const m = cfg.match(/organization\s*=\s*(\S+)/);
-          if (!m) throw new Error("no org: set ado.org in addons.json or run az devops configure -d organization=…");
-          this.org = m[1].replace(/\/+$/, "").split("/").pop();
-        }
+        await this.ensureOrg();
         if (!this.me) this.me = (await az(["account", "show", "--query", "user.name", "-o", "tsv"])).trim().toLowerCase();
         const url = `https://dev.azure.com/${this.org}/_apis/git/pullrequests?searchCriteria.status=active&$top=1000&api-version=7.1`;
         const out = await az(["rest", "--resource", ADO_RESOURCE, "-u", url, "--query", QUERY, "-o", "json"]);
@@ -127,9 +130,48 @@ export default class AdoPrs extends View {
     });
   }
 
+  // ado.org from addons.json, else the az devops default.
+  async ensureOrg() {
+    if (!this.org) this.org = (await addonSettings()).ado?.org || null;
+    if (this.org) return;
+    const cfg = await az(["devops", "configure", "-l"]);
+    const m = cfg.match(/organization\s*=\s*(\S+)/);
+    if (!m) throw new Error("no org: set ado.org in addons.json or run az devops configure -d organization=…");
+    this.org = m[1].replace(/\/+$/, "").split("/").pop();
+  }
+
+  // Look up one PR by id: from the loaded list when it's there, else from ADO
+  // (any project, any status, any age).
+  find(cx) {
+    const raw = this.idBox.value().trim().replace(/^[!#]/, "");
+    if (!raw) { this.lookup = null; cx.notify(); return; }
+    if (!/^\d+$/.test(raw)) { this.lookup = { id: raw, error: "Enter a numeric pull request id" }; cx.notify(); return; }
+    const id = Number(raw);
+    const known = (this.prs ?? []).find((pr) => pr.id === id);
+    if (known) { this.lookup = { id, pr: { ...known, status: "active" } }; cx.notify(); return; }
+    this.lookup = { id, loading: true };
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        await this.ensureOrg();
+        const url = `https://dev.azure.com/${this.org}/_apis/git/pullrequests/${id}?api-version=7.1`;
+        const pr = JSON.parse(await az(["rest", "--resource", ADO_RESOURCE, "-u", url, "--query", ONE_QUERY, "-o", "json"]));
+        if (this.lookup?.id === id) this.lookup = { id, pr };
+        if (pr && !(id in this.threads)) this.loadThreads(cx, [pr]);
+      } catch (e) {
+        const msg = String(e?.message ?? e);
+        if (this.lookup?.id === id) {
+          this.lookup = { id, error: /TF401180|404|Not Found|does not exist/i.test(msg) ? `!${id} doesn't exist, or you can't read it` : msg };
+        }
+      } finally {
+        cx.notify();
+      }
+    });
+  }
+
   // Resolved vs unresolved comment threads, a few PRs at a time; rows fill in as they arrive.
-  async loadThreads(cx) {
-    const queue = [...(this.prs ?? [])];
+  async loadThreads(cx, prs = this.prs) {
+    const queue = [...(prs ?? [])];
     const worker = async () => {
       for (let pr; (pr = queue.shift()); ) {
         const url = `https://dev.azure.com/${this.org}/${encodeURIComponent(pr.project)}/_apis/git/repositories/${pr.repoId}/pullRequests/${pr.id}/threads?api-version=7.1`;
@@ -147,9 +189,9 @@ export default class AdoPrs extends View {
   }
 
   // ● unresolved · ✓ resolved
-  comments(t, pr) {
+  comments(t, pr, key = "pr") {
     const c = this.threads[pr.id];
-    const box = h_flex().id(`c-${pr.id}`).flex_none().w(64).gap(6).text_size(11.5);
+    const box = h_flex().id(`c-${key}-${pr.id}`).flex_none().w(64).gap(6).text_size(11.5);
     if (!c) return box.child(div().text_color(t.dim).child("…"));
     if (c.error) return box.tooltip(`Couldn't load comments: ${c.error}`).child(div().text_color(t.blocked).child("!"));
     if (!c.open && !c.resolved) return box.tooltip("No comments").child(div().text_color(t.dim).child("—"));
@@ -251,7 +293,7 @@ export default class AdoPrs extends View {
   }
 
   // ✓ approved · ~ with suggestions · … waiting · ✗ rejected · ○ no vote
-  votes(t, pr) {
+  votes(t, pr, key = "pr") {
     const people = (pr.reviewers ?? []).filter((r) => !r.group || r.vote !== 0);
     const count = (f) => people.filter(f).length;
     const parts = [
@@ -264,36 +306,38 @@ export default class AdoPrs extends View {
     const tip = people.length
       ? people.map((r) => `${({ 10: "✓", 5: "~", "-5": "…", "-10": "✗" })[r.vote] ?? "○"} ${r.name.replace(/^\[.*?\]\\/, "")}${r.required ? " (required)" : ""}`).join("\n")
       : "No reviewers";
-    return h_flex().id(`v-${pr.id}`).flex_none().gap(6).text_size(11.5).tooltip(tip).children(
+    return h_flex().id(`v-${key}-${pr.id}`).flex_none().gap(6).text_size(11.5).tooltip(tip).children(
       parts.length ? parts.map(([n, g, c]) => div().text_color(c).child(`${g}${n}`)) : [div().text_color(t.dim).child("—")],
     );
   }
 
-  row(t, pr) {
+  row(t, pr, key = "pr") {
     const review = this.toReview(pr);
-    const conflict = pr.merge === "conflicts";
-    return h_flex().id(`pr-${pr.id}`).px(12).py(7).gap(12).items_center().rounded(6).cursor_pointer()
+    const conflict = pr.merge === "conflicts" && (pr.status ?? "active") === "active";
+    const closed = pr.status && pr.status !== "active" ? String(pr.status).toUpperCase() : null;
+    return h_flex().id(`${key}-${pr.id}`).px(12).py(7).gap(12).items_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click(() => this.open(pr))
       .child(div().flex_none().w(3).h(30).rounded(2).bg(review ? t.accent : this.mine(pr) ? t.done : "#00000000"))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(h_flex().gap(8).items_center().min_w(0)
+          .when(Boolean(closed), (el) => el.child(this.badge(t, closed, pr.status === "completed" ? t.working : t.dim)))
           .when(pr.draft, (el) => el.child(this.badge(t, "DRAFT", t.dim)))
           .when(conflict, (el) => el.child(this.badge(t, "CONFLICT", t.blocked)))
           .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(pr.draft ? t.muted : t.foreground).child(pr.title)))
         .child(div().truncate().text_size(11.5).text_color(t.dim)
           .child(`${pr.repo} · !${pr.id} · ${branch(pr.source)} → ${branch(pr.target)}`)))
       .child(div().flex_none().w(140).truncate().text_size(12).text_color(t.muted).child(pr.author ?? ""))
-      .child(div().flex_none().w(90).child(this.votes(t, pr)))
-      .child(this.comments(t, pr))
+      .child(div().flex_none().w(90).child(this.votes(t, pr, key)))
+      .child(this.comments(t, pr, key))
       .child(div().flex_none().w(32).text_size(11.5).text_color(t.dim).child(ago(pr.created)))
       .child(h_flex().flex_none().gap(2)
-        .child(this.action(t, `rv-${pr.id}`, "review.svg", "Review with Claude Code", () => this.review(pr)))
-        .child(this.action(t, `sl-${pr.id}`, "slack.svg", "Copy Slack message", (cx) => {
+        .child(this.action(t, `rv-${key}-${pr.id}`, "review.svg", "Review with Claude Code", () => this.review(pr)))
+        .child(this.action(t, `sl-${key}-${pr.id}`, "slack.svg", "Copy Slack message", (cx) => {
           cx.write_to_clipboard(this.slackText(pr));
           notify({ title: "Slack message copied", body: `!${pr.id} ${pr.title}`, level: "info", timeout: 2000 });
         }))
-        .child(this.action(t, `op-${pr.id}`, "external.svg", "Open in browser", () => this.open(pr))));
+        .child(this.action(t, `op-${key}-${pr.id}`, "external.svg", "Open in browser", () => this.open(pr))));
   }
 
   action(t, id, icon, tip, fn) {
@@ -321,6 +365,10 @@ export default class AdoPrs extends View {
         }))))
       .child(h_flex().flex_1().min_w(180).h(26).px(8).rounded(6).bg(t.background).border(1).border_color(t.input)
         .child(Input.new(this.search).h_full().w_full().text_size(12).text_color(t.foreground)))
+      .child(h_flex().id("id-box").flex_none().w(130).h(26).px(8).gap(6).items_center().rounded(6).bg(t.background).border(1)
+        .border_color(this.lookup ? t.accent : t.input).tooltip("Look up any pull request by id (Enter)")
+        .child(svg("mods/ado-prs/hash.svg").size(12).flex_none().text_color(t.dim))
+        .child(Input.new(this.idBox).h_full().w_full().text_size(12).text_color(t.foreground)))
       .child(div().text_size(11).text_color(this.error ? t.blocked : t.dim).child(status))
       .child(this.iconButton(t, "refresh", "mods/ado-prs/refresh.svg", "Refresh", (_e, cx) => this.refresh(cx), this.loading))
       .when(Boolean(props()?.overlay), (el) => el
@@ -329,6 +377,23 @@ export default class AdoPrs extends View {
           run("pane.split", { direction: "right", mod: "ado-prs" });
         }))
         .child(this.iconButton(t, "close", "mods/ado-prs/x.svg", "Close", () => this.dismiss())));
+  }
+
+  // The id lookup's result, pinned above the list.
+  lookupCard(t) {
+    const l = this.lookup;
+    const close = this.iconButton(t, "lookup-x", "mods/ado-prs/x.svg", "Clear lookup", (_e, cx) => {
+      this.lookup = null;
+      this.idBox.set_value("");
+      cx.notify();
+    });
+    const body = l.pr ? this.row(t, l.pr, "lk")
+      : div().px(12).py(9).text_size(12).text_color(l.error ? t.blocked : t.dim).child(l.error ?? `Looking up !${l.id}…`);
+    return v_flex().flex_none().mx(8).mt(8).p(4).rounded(8).border(1).border_color(t.border).bg(t.raised)
+      .child(h_flex().px(8).pt(2).items_center()
+        .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child(l.pr ? `${l.pr.project} · !${l.id}` : `PR !${l.id}`))
+        .child(close))
+      .child(body);
   }
 
   body(t, list) {
@@ -368,6 +433,7 @@ export default class AdoPrs extends View {
     const list = this.visible();
     return v_flex().size_full().min_h(0).overflow_hidden().bg(t.surface).text_color(t.foreground)
       .child(this.header(t, list.length))
+      .when(Boolean(this.lookup), (el) => el.child(this.lookupCard(t)))
       .child(this.body(t, list));
   }
 }

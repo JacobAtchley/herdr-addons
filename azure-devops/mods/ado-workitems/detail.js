@@ -233,6 +233,10 @@ export function htmlToMarkdown(html) {
   return out.join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
 
+// One pull request, trimmed to what the Pull requests section shows.
+const PR_QUERY = "{id:pullRequestId,title:title,status:status,draft:isDraft,source:sourceRefName,target:targetRefName," +
+  "repo:repository.name,project:repository.project.name,author:createdBy.displayName,votes:reviewers[].vote}";
+
 // ---- the view
 
 export class Detail {
@@ -243,6 +247,7 @@ export class Detail {
     this.wi = null;
     this.meta = null;
     this.comments = null;
+    this.prs = null; // linked pull requests: [{ id, pr? , error? }]
     this.error = null;
     this.edit = null;
     this.saving = false;
@@ -268,7 +273,7 @@ export class Detail {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const wi = await get(`https://dev.azure.com/${this.org}/_apis/wit/workitems/${this.id}?api-version=7.1`);
+        const wi = await get(`https://dev.azure.com/${this.org}/_apis/wit/workitems/${this.id}?$expand=relations&api-version=7.1`);
         const project = wi.fields["System.TeamProject"];
         const [meta, html, comments] = await Promise.all([
           loadTypeMeta(this.org, project, wi.fields["System.WorkItemType"]),
@@ -280,6 +285,7 @@ export class Detail {
         this.setMeta(meta, html);
         this.comments = comments ?? [];
         this.loadImages(cx);
+        this.loadPrs(wi.relations, cx);
       } catch (e) {
         const msg = String(e?.message ?? e);
         this.error = /TF401232/.test(msg) ? `#${this.id} doesn't exist, or you can't read it` : msg;
@@ -287,6 +293,29 @@ export class Detail {
         cx.notify();
       }
     });
+  }
+
+  // Pull requests linked from this item ("Pull Request" artifact links:
+  // vstfs:///Git/PullRequestId/<project>%2F<repo>%2F<id>), fetched by id.
+  loadPrs(relations, cx) {
+    const ids = [...new Set((relations ?? [])
+      .filter((r) => r.rel === "ArtifactLink")
+      .map((r) => /^vstfs:\/\/\/Git\/PullRequestId\/.*%2f(\d+)$/i.exec(r.url ?? "")?.[1])
+      .filter(Boolean).map(Number))];
+    this.prs = ids.map((id) => ({ id }));
+    cx.notify();
+    for (const entry of this.prs) {
+      cx.spawn(async (cx) => {
+        try {
+          entry.pr = await get(`https://dev.azure.com/${this.org}/_apis/git/pullrequests/${entry.id}?api-version=7.1`, PR_QUERY);
+        } catch (e) {
+          const msg = String(e?.message ?? e);
+          entry.error = /TF401180/.test(msg) ? "deleted, or you can't read it" : msg;
+        } finally {
+          cx.notify();
+        }
+      });
+    }
   }
 
   // Every picture in the rich fields and comments, fetched in the background.
@@ -442,7 +471,7 @@ export class Detail {
           [{ op: "test", path: "/rev", value: this.wi.rev }, ...ops]);
         this.wi = wi;
         this.edit = null;
-        this.host.updated?.(this.wi.fields);
+        this.host.updated?.({ ...this.wi.fields, "System.Id": this.wi.id });
         this.loadImages(cx);
         notify({ title: `Saved #${this.id}`, body: wi.fields["System.Title"], level: "info", timeout: 2500 });
       } catch (e) {
@@ -634,6 +663,47 @@ export class Detail {
       .child(div().w_full().min_w(0).p(12).rounded(8).bg(t.raised).child(body));
   }
 
+  prUrl(pr) {
+    const enc = encodeURIComponent;
+    return `https://dev.azure.com/${this.org}/${enc(pr.project)}/_git/${enc(pr.repo)}/pullrequest/${pr.id}`;
+  }
+
+  prsSection(t) {
+    const list = this.prs ?? [];
+    if (!list.length) return null;
+    const branch = (ref) => (ref ?? "").replace(/^refs\/heads\//, "");
+    const row = ({ id, pr, error }) => {
+      if (!pr) {
+        return h_flex().id(`lp-${id}`).px(10).py(7).gap(8).rounded(8).border(1).border_color(t.border).text_size(12)
+          .child(div().text_color(t.dim).child(`!${id}`))
+          .child(div().text_color(error ? t.blocked : t.dim).child(error ?? "Loading…"));
+      }
+      const status = pr.draft && pr.status === "active" ? "draft" : pr.status;
+      const sc = { active: t.accent, completed: t.working, abandoned: t.dim, draft: t.dim }[status] ?? t.dim;
+      const voted = (pr.votes ?? []).filter((v) => v);
+      const approved = voted.filter((v) => v > 0).length;
+      const waiting = voted.filter((v) => v < 0).length;
+      return h_flex().id(`lp-${id}`).px(10).py(7).gap(10).items_center().rounded(8).border(1).border_color(t.border).cursor_pointer()
+        .hover((s) => s.bg(t.hover))
+        .tooltip("Open in browser")
+        .on_click(() => exec("open", [this.prUrl(pr)]).catch(() => {}))
+        .child(div().flex_none().px(6).rounded(4).border(1).border_color(sc).text_size(10.5).font_semibold().text_color(sc)
+          .child(String(status ?? "?").toUpperCase()))
+        .child(v_flex().flex_1().min_w(0).gap(2)
+          .child(div().truncate().text_size(12.5).text_color(t.foreground).child(`!${pr.id} ${pr.title ?? ""}`))
+          .child(div().truncate().text_size(11).text_color(t.dim)
+            .child(`${pr.repo} · ${branch(pr.source)} → ${branch(pr.target)} · ${pr.author ?? "?"}`)))
+        .when(approved > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.working).child(`✓${approved}`)))
+        .when(waiting > 0, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.done).child(`…${waiting}`)))
+        .child(svg(ICON("external")).size(12).flex_none().text_color(t.dim));
+    };
+    return v_flex().gap(8)
+      .child(h_flex().gap(8).items_center()
+        .child(div().text_size(12).font_semibold().text_color(t.muted).child("Pull requests"))
+        .child(div().text_size(11).text_color(t.dim).child(String(list.length))))
+      .children(list.map(row));
+  }
+
   commentsSection(t) {
     const list = this.comments ?? [];
     return v_flex().gap(8)
@@ -663,6 +733,7 @@ export class Detail {
           .text_size(12).text_color(t.blocked).child(this.saveError)))
         .when(Boolean(this.error), (el) => el.child(div().text_size(12).text_color(t.blocked).child(this.error)))
         .child(this.facts(t))
+        .when(!this.edit && Boolean(this.prs?.length), (el) => el.child(this.prsSection(t)))
         .children(this.meta.rich.map((ref) => this.richSection(t, ref)).filter(Boolean))
         .when(!this.edit, (el) => el.child(this.commentsSection(t))));
     }

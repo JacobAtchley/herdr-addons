@@ -37,6 +37,11 @@ to right it holds:
 - filter pills in a `raised` group (2px padding, 8px radius). The active pill is
   `selected` with `foreground` text, and the rest are `muted`, in 12px.
 - a search box, 26px high, on `background` with a 1px `input` border
+- a 130px `#` PR id box ("PR id ↵"). Enter looks up that one PR, from the
+  loaded list or else by id at the org level (any project, status or age), and
+  pins it in a `raised` card above the list with a COMPLETED or ABANDONED badge
+  when closed, or "!id doesn't exist, or you can't read it". The card's × or an
+  empty box clears it. The pills and search don't apply to it.
 - a status line in 11px `dim`: "loading…", "updated 3m ago", or "fetch failed"
   in `blocked`
 - a refresh icon that spins while loading
@@ -147,6 +152,13 @@ padding and 18px gaps. It shows:
   has), Iteration, Area, Parent (an `accent` link that opens the parent),
   Created and Updated (`person · 2d ago`)
 - tags as chips
+- "Pull requests", only when the item has PR links (`ArtifactLink` relations
+  whose url is `vstfs:///Git/PullRequestId/<project>%2F<repo>%2F<id>`; load the
+  item with `$expand=relations`, then each PR by id at the org level). Each PR
+  is a bordered row: a status badge (ACTIVE `accent`, COMPLETED `working`,
+  ABANDONED or DRAFT `dim`), `!id title`, `repo · source → target · author`
+  in `dim`, then `✓n` approvals and `…n` waiting votes. A click opens it in
+  the browser. Hidden while editing.
 - the rich-text fields: Description, Repro Steps, Acceptance Criteria and System
   Info first, then any other HTML field the type has. Each one is a `raised`
   box (12px padding, 8px radius) headed by its name and a "Markdown" or "HTML"
