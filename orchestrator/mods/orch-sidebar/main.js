@@ -3,6 +3,10 @@
 // it has been running; one halted on a permission ask says "Needs you". A click
 // opens the session's transcript in the orch dialog.
 //
+// PR reviews aren't sessions: the orchestrator tracks them on the PR in
+// /v1/pr-inbox (review_workflow.state "PR_REVIEWING"), so those are read
+// too and listed as rows that open the dialog's PRs tab.
+//
 // Placed by layouts/my-main.json (block "orchestrator" in sidebar-lists).
 
 import { View, div, svg } from "gpui-kit";
@@ -29,6 +33,9 @@ async function get(path) {
   return JSON.parse(r.stdout || "null");
 }
 
+// A PR workflow state that means work is under way: PR_REVIEWING, PR_ADDRESSING, …
+const isActive = (state) => /ING$/.test(String(state ?? ""));
+
 const itemOf = (wf) => `${wf.source_type}-${wf.source_id}`;
 const phaseLabel = (p) => (p ? String(p).replace(/_/g, " ") : "");
 
@@ -44,6 +51,8 @@ function elapsed(s) {
 export default class OrchSidebar extends View {
   init(_props, cx) {
     this.sessions = null;
+    this.reviews = [];
+    this.seen = {}; // pr id → when this panel first saw its review running
     this.titles = {};
     this.offline = false;
     this.load(cx);
@@ -51,7 +60,7 @@ export default class OrchSidebar extends View {
     cx.timer.every(SESSIONS_MS, (cx) => this.load(cx));
     cx.timer.every(TITLES_MS, (cx) => this.loadTitles(cx));
     // The running clocks: a repaint a second, only while something runs.
-    cx.timer.every(1000, (cx) => { if (this.sessions?.length) cx.notify(); });
+    cx.timer.every(1000, (cx) => { if (this.sessions?.length || this.reviews.length) cx.notify(); });
   }
 
   load(cx) {
@@ -65,6 +74,7 @@ export default class OrchSidebar extends View {
         if (list.some((s) => !(s.workflow_id in this.titles))) this.loadTitles(cx);
         this.sessions = list;
         this.offline = false;
+        this.reviews = await this.loadReviews();
       } catch {
         this.offline = true;
       } finally {
@@ -72,6 +82,38 @@ export default class OrchSidebar extends View {
         cx.notify();
       }
     });
+  }
+
+  // PRs whose review (or tracked) workflow is running. A failed read keeps the last list.
+  async loadReviews() {
+    try {
+      const d = await get("/v1/pr-inbox");
+      const now = Date.now() / 1000;
+      const out = [];
+      for (const p of [...(d?.review_requests ?? []), ...(d?.my_prs ?? [])]) {
+        const wf = p.review_workflow ?? p.tracked_workflow;
+        const state = typeof wf === "object" ? wf?.state : null;
+        if (!isActive(state) || out.some((r) => r.pr_id === p.pr_id)) continue;
+        this.seen[p.pr_id] ??= now;
+        out.push({ ...p, state });
+      }
+      for (const id of Object.keys(this.seen)) if (!out.some((r) => String(r.pr_id) === id)) delete this.seen[id];
+      return out;
+    } catch {
+      return this.reviews;
+    }
+  }
+
+  reviewRow(t, r, now) {
+    return h_flex().id(`or-${r.pr_id}`).px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
+      .hover((x) => x.bg(t.hover))
+      .tooltip(`${r.title}\n${[r.repo_name, `!${r.pr_id}`, phaseLabel(r.state)].filter(Boolean).join(" · ")}`)
+      .on_click(() => openOverlay({ ...DIALOG, props: { tab: "prs" } }))
+      .child(h_flex().flex_1().min_w(0).gap(5).items_center()
+        .child(div().min_w(0).max_w(150).truncate().text_color(t.foreground).child(`!${r.pr_id} ${r.title ?? ""}`))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`· ${phaseLabel(String(r.state).replace(/^PR_/, "")).toLowerCase()}`)))
+      .child(div().flex_none().text_size(11).text_color(t.dim).child(elapsed(now - this.seen[r.pr_id])))
+      .child(svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900));
   }
 
   loadTitles(cx) {
@@ -111,19 +153,21 @@ export default class OrchSidebar extends View {
     const t = theme();
     const now = Date.now() / 1000;
     const list = this.sessions ?? [];
+    const count = list.length + this.reviews.length;
     const note = (text) => div().px(12).text_size(12).text_color(t.dim).child(text);
     return v_flex().size_full().min_h(0).bg(t.chrome).border_t(1).border_color(t.border).text_size(13)
       .child(h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().gap(6)
         .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Orchestrator"))
-        .when(list.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim).child(String(list.length))))
+        .when(count > 0, (el) => el.child(div().text_size(11).text_color(t.dim).child(String(count))))
         .child(div().flex_1())
         .child(div().id("os-open").text_size(11).text_color(t.dim).cursor_pointer()
           .hover((x) => x.text_color(t.foreground))
           .tooltip("Open the Orchestrator")
           .on_click(() => openOverlay({ ...DIALOG, props: { tab: "sessions" } }))
           .child(svg("mods/orch/wand.svg").size(13))))
-      .when(this.offline && !list.length, (el) => el.child(note("Orchestrator offline.")))
-      .when(!this.offline && this.sessions !== null && !list.length, (el) => el.child(note("No sessions running.")))
-      .child(v_flex().id("os-list").flex_1().min_h(0).px(8).overflow_y_scrollbar().children(list.map((s) => this.row(t, s, now))));
+      .when(this.offline && !count, (el) => el.child(note("Orchestrator offline.")))
+      .when(!this.offline && this.sessions !== null && !count, (el) => el.child(note("No sessions running.")))
+      .child(v_flex().id("os-list").flex_1().min_h(0).px(8).overflow_y_scrollbar().children(list.map((s) => this.row(t, s, now)))
+        .children(this.reviews.map((r) => this.reviewRow(t, r, now))));
   }
 }
