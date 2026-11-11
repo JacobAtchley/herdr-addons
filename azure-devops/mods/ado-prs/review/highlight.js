@@ -21,16 +21,23 @@ function hash(s) {
   return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 
-async function findBat() {
-  if (batPath !== undefined) return batPath;
-  batPath = null;
-  for (const p of BATS) {
-    try {
-      const r = await exec(p, ["--version"], { timeout: 5000 });
-      if (r.code === 0) { batPath = p; break; }
-    } catch { /* not at this path */ }
-  }
-  return batPath;
+// The probe is shared: concurrent callers (old + new side) must wait for the
+// same answer, not see "not found" while it runs.
+let batProbe = null;
+function findBat() {
+  if (batPath !== undefined) return Promise.resolve(batPath);
+  batProbe ??= (async () => {
+    let found = null;
+    for (const p of BATS) {
+      try {
+        const r = await exec(p, ["--version"], { timeout: 5000 });
+        if (r.code === 0) { found = p; break; }
+      } catch { /* not at this path */ }
+    }
+    batPath = found;
+    return found;
+  })();
+  return batProbe;
 }
 
 export async function batAvailable() {

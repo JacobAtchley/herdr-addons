@@ -62,14 +62,19 @@ export class Drafts {
       throw e;
     }
     this._unsafe = false;
-    const mine = raced[pr];
-    const dirty = this._dirty || !!(mine && Object.keys(mine).length);
+    // Edits made while loading (to any PR: a view for an earlier PR may still
+    // be finishing a post) are merged over the loaded data, then the deletes
+    // that arrived meanwhile are replayed in order.
+    const dirty = this._dirty || Object.values(raced).some((m) => Object.keys(m).length > 0);
     this._data = loaded;
-    if (mine && Object.keys(mine).length) {
-      this._data[pr] = { ...(loaded[pr] ?? {}), ...mine };
+    for (const [p, map] of Object.entries(raced)) {
+      if (Object.keys(map).length) this._data[p] = { ...(loaded[p] ?? {}), ...map };
     }
+    const deletes = this._pendingDeletes ?? [];
+    this._pendingDeletes = [];
     this._loading = false;
     this._dirty = false;
+    for (const [key, opts] of deletes) this._deleteNow(key, opts);
     if (dirty) this._schedule();
     const cutoff = this._now() - Drafts.MAX_AGE_MS;
     let pruned = false;
@@ -82,26 +87,47 @@ export class Drafts {
     if (pruned) await this._write();
   }
 
-  get(key) {
-    return this._data[this._pr]?.[key] ?? null;
+  get(key, pr = this._pr) {
+    return this._data[pr]?.[key] ?? null;
   }
 
-  set(key, target, body) {
-    if (!body) return this.delete(key);
-    (this._data[this._pr] ??= {})[key] = { body, target, updated: this._now() };
+  // `pr` defaults to the open PR; a view passes its own so that a late event
+  // (after the user moved to another PR) can't touch that other PR's drafts.
+  set(key, target, body, pr = this._pr) {
+    if (!body) return this.delete(key, { pr });
+    // A newer set wins over a delete queued during a load.
+    if (this._pendingDeletes?.length) this._pendingDeletes = this._pendingDeletes.filter(([k, o]) => k !== key || o.pr !== pr);
+    (this._data[pr] ??= {})[key] = { body, target, updated: this._now() };
     this._schedule();
   }
 
-  delete(key) {
-    const map = this._data[this._pr];
+  /**
+   * Remove a draft. `pr` (default: the open PR) names the PR it belongs to.
+   * `ifBody`: only when the stored body (trimmed) still equals it, so text
+   * typed while a post was in flight survives the post's cleanup.
+   */
+  delete(key, { pr = this._pr, ifBody } = {}) {
+    if (this._loading) {
+      // _data is partial during a load: replay once it has merged.
+      (this._pendingDeletes ??= []).push([key, { pr, ifBody }]);
+      const map = this._data[pr];
+      if (map && key in map && (ifBody == null || String(map[key].body).trim() === String(ifBody).trim())) delete map[key];
+      return;
+    }
+    this._deleteNow(key, { pr, ifBody });
+  }
+
+  _deleteNow(key, { pr, ifBody }) {
+    const map = this._data[pr];
     if (!map || !(key in map)) return;
+    if (ifBody != null && String(map[key].body ?? "").trim() !== String(ifBody).trim()) return;
     delete map[key];
-    if (Object.keys(map).length === 0) delete this._data[this._pr];
+    if (Object.keys(map).length === 0) delete this._data[pr];
     this._schedule();
   }
 
-  list() {
-    return Object.entries(this._data[this._pr] ?? {}).map(([key, v]) => ({
+  list(pr = this._pr) {
+    return Object.entries(this._data[pr] ?? {}).map(([key, v]) => ({
       key, target: v.target, body: v.body, updated: v.updated,
     }));
   }

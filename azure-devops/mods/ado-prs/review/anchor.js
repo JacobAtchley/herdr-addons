@@ -8,7 +8,8 @@ function place(rows, items, path, anchorOf) {
     const a = anchorOf(item);
     if (!a || a.path !== path) continue;
     const key = a.side === "left" ? "oldNo" : "newNo";
-    const idx = rows.findIndex((r) => r[key] === a.line);
+    // A missing line must not match the null oldNo/newNo of add/del rows.
+    const idx = a.line == null ? -1 : rows.findIndex((r) => r[key] === a.line);
     if (idx < 0) {
       outdated.push(item);
       continue;

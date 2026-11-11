@@ -175,3 +175,60 @@ test("onError is called when a debounced save rejects; flush rejects", async () 
   d.set("g", { general: true }, "b");
   await assert.rejects(d.flush(), /disk/);
 });
+
+test("delete with an explicit pr targets that PR after navigating to another", async () => {
+  const m = mem(null);
+  const d = new Drafts({ ...m, now: () => 1 });
+  await d.open("o/r/A");
+  d.set("g", { general: true }, "posted on A");
+  await d.open("o/r/B");
+  d.set("g", { general: true }, "B's draft");
+  d.delete("g", { pr: "o/r/A", ifBody: "posted on A" }); // A's post completes late
+  assert.equal(d.get("g").body, "B's draft");
+  await d.flush();
+  assert.equal(m.peek()["o/r/A"], undefined);
+  assert.equal(m.peek()["o/r/B"].g.body, "B's draft");
+});
+
+test("delete ifBody keeps text typed while the post was in flight", async () => {
+  const m = mem(null);
+  const d = new Drafts({ ...m, now: () => 1 });
+  await d.open("o/r/A");
+  d.set("g", { general: true }, "first");
+  d.set("g", { general: true }, "first and more"); // typed during the post of "first"
+  d.delete("g", { ifBody: "first" });
+  assert.equal(d.get("g").body, "first and more");
+  d.delete("g", { ifBody: "  first and more\n" }); // compared trimmed
+  assert.equal(d.get("g"), null);
+});
+
+test("set/delete for an earlier PR while another PR is loading survive the load", async () => {
+  const m = mem({ "o/r/A": { g: { body: "a", target: { general: true }, updated: 1 }, x: { body: "x", target: { thread: 3 }, updated: 1 } } });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  const d = new Drafts({ load: async () => { if (calls++ === 1) await gate; return m.peek(); }, save: m.save, now: () => 2 });
+  await d.open("o/r/A");
+  const opening = d.open("o/r/B");
+  d.delete("g", { pr: "o/r/A", ifBody: "a" });
+  d.set("t:9", { thread: 9 }, "late A reply", "o/r/A");
+  release();
+  await opening;
+  await d.flush();
+  assert.equal(m.peek()["o/r/A"].g, undefined);
+  assert.equal(m.peek()["o/r/A"].x.body, "x");
+  assert.equal(m.peek()["o/r/A"]["t:9"].body, "late A reply");
+});
+
+test("a set after a delete queued during a load wins", async () => {
+  const m = mem({ "o/r/B": { g: { body: "old", target: { general: true }, updated: 1 } } });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const d = new Drafts({ load: async () => { await gate; return m.peek(); }, save: m.save, now: () => 2 });
+  const opening = d.open("o/r/B");
+  d.delete("g");
+  d.set("g", { general: true }, "new");
+  release();
+  await opening;
+  assert.equal(d.get("g").body, "new");
+});

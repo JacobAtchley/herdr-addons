@@ -113,12 +113,12 @@ export default class AdoPrs extends View {
     cx.timer.every(REFRESH_MS, (cx) => this.refresh(cx));
   }
 
-  openReview({ project, repoId, id }, cx) {
+  openReview({ project, repoId, id, file }, cx) {
     cx.spawn(async (cx) => {
       try {
         await this.ensureOrg();
         this.review?.dispose();
-        this.review = new Review(this.reviewHost(), { project, repoId, id }, cx);
+        this.review = new Review(this.reviewHost(), { project, repoId, id, file }, cx);
       } catch (e) {
         notify({ title: "Couldn't open pull request", body: String(e?.message ?? e), level: "error" });
       }

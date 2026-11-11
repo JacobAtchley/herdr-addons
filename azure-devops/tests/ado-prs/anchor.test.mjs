@@ -48,3 +48,11 @@ test("placeDrafts places only file drafts for this path", () => {
   assert.deepEqual(r.outdated.map((x) => x.key), ["b"]);
   assert.equal(r.byRow.size, 1);
 });
+test("a null/undefined line is outdated, never matched to an add/del row's null number", () => {
+  const t = placeThreads(rows, [T(1, "x", "left", null), T(2, "x", "right", undefined)], "x");
+  assert.deepEqual(t.outdated.map((x) => x.id), [1, 2]);
+  assert.equal(t.byRow.size, 0);
+  const d = placeDrafts(rows, [{ key: "a", target: { file: "x", side: "right", line: null } }], "x");
+  assert.deepEqual(d.outdated.map((x) => x.key), ["a"]);
+  assert.equal(d.byRow.size, 0);
+});

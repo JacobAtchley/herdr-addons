@@ -17,8 +17,11 @@ import {
   myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, targetLabel, ago, displayName,
 } from "./summary.js";
 import { ICON, button, iconButton, textAction, badge, count, section, note, centered } from "./ui/parts.js";
+import { FilePages } from "./filepage.js";
+import { sinceLastLook } from "./rows.js";
 
 const GATE_POLL_MS = 30000;
+const THEME_CHECK_MS = 1000;
 const LIST_W = 260;
 const OVERVIEW = "overview";
 
@@ -62,13 +65,17 @@ export class Review {
     this.provider = createAdoProvider({ rest, org: host.org });
     this.drafts = drafts();
     draftsError = (e) => host.notify(`Couldn't save comment drafts: ${msg(e)}`);
-    this.page = OVERVIEW;
+    this.pk = prKey(this.ref); // drafts of this view always go to this PR
+    this.page = ref.file ? String(ref.file) : OVERVIEW; // props may open a file directly
     this.pr = null;
     this.me = null;
     this.threads = null;
     this.files = null;
     this.filesError = null;
-    this.range = null; // {from, to}; Task 7 adds the "since last look" toggle
+    this.range = null; // {from, to} iteration ids shown
+    this.rangeMode = "all"; // "all" | "since" (last look)
+    this.lastLook = undefined; // latest version seen on the previous visit (null: none)
+    this.fp = new FilePages(this);
     this.error = null;
     this.loading = false;
     this.busy = new Set(); // keys of writes in flight
@@ -82,11 +89,15 @@ export class Review {
       // and checks finish on their own, so only they keep the poll going.
       if (this.pr && anyRunning(this.pr.gates.filter((g) => g.kind !== "policy")) && !this.loading) this.refreshPr(cx);
     });
+    // render() notes the theme's darkness; this re-highlights after a switch.
+    this.themeCheck = cx.timer.every(THEME_CHECK_MS, (cx) => this.fp.checkTheme(cx));
   }
 
   dispose() {
     this.poll?.cancel();
     this.poll = null;
+    this.themeCheck?.cancel();
+    this.themeCheck = null;
     this.drafts.flush().catch((e) => draftsError(e));
   }
 
@@ -96,7 +107,38 @@ export class Review {
   }
 
   rangeFor(pr) {
+    const since = sinceLastLook(this.lastLook, pr.versions);
+    if (this.rangeMode === "since" && since.available) return { from: since.from, to: pr.versions.latest };
     return { from: null, to: pr.versions.latest };
+  }
+
+  // "Last look": the previous visit's latest version is read once (before this
+  // visit overwrites it) and is the `from` of "Since last look".
+  recordLook(pr) {
+    const k = `review.seen.${this.pk}`;
+    try {
+      if (this.lastLook === undefined) {
+        const prev = Number.parseInt(localStorage.getItem(k) ?? "", 10);
+        this.lastLook = Number.isFinite(prev) ? prev : null;
+      }
+      if (pr.versions.latest != null) localStorage.setItem(k, String(pr.versions.latest));
+    } catch {
+      if (this.lastLook === undefined) this.lastLook = null;
+    }
+  }
+
+  setRangeMode(cx, mode) {
+    if (this.rangeMode === mode || !this.pr) return;
+    this.rangeMode = mode;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        await this.apply(this.pr, cx);
+      } catch (e) {
+        this.host.notify(msg(e));
+      }
+      cx.notify();
+    });
   }
 
   // ---- loading
@@ -111,15 +153,19 @@ export class Review {
         const [pr, me] = await Promise.all([
           this.provider.getPullRequest(this.ref),
           this.provider.me().catch(() => null),
-          this.drafts.open(prKey(this.ref)).catch(() => {}),
+          this.drafts.open(this.pk).catch(() => {}),
         ]);
         this.me = me;
+        this.recordLook(pr);
         await this.apply(pr, cx);
         if (!this.boxes.has("g")) this.composer("g", { general: true }, cx);
-        for (const d of this.drafts.list()) {
-          if (d.target?.thread != null && !this.boxes.has(d.key)) {
+        for (const d of this.drafts.list(this.pk)) {
+          if (this.boxes.has(d.key)) continue;
+          if (d.target?.thread != null) {
             this.composer(d.key, d.target, cx);
             this.replying.add(d.target.thread);
+          } else if (d.target?.file != null) {
+            this.composer(d.key, d.target, cx);
           }
         }
       } catch (e) {
@@ -145,6 +191,7 @@ export class Review {
     this.threads = threads;
     if (files || !same) this.files = files;
     if (this.page !== OVERVIEW && this.files && !this.files.some((f) => f.path === this.page)) this.page = OVERVIEW;
+    this.fp.ensure(cx);
     cx.notify();
   }
 
@@ -205,10 +252,11 @@ export class Review {
   // A comment box bound to the drafts store. Created from init/async/event
   // context only (TextareaState can't be created in render).
   composer(key, target, _cx) {
-    const state = TextareaState.new({ value: this.drafts.get(key)?.body ?? "", placeholder: "Markdown… (saved as a draft until posted)" });
+    const state = TextareaState.new({ value: this.drafts.get(key, this.pk)?.body ?? "", placeholder: "Markdown… (saved as a draft until posted)" });
     state.set_auto_grow(2, 12);
     state.on("change", (_e, cx) => {
-      this.drafts.set(key, target, state.value());
+      // Always this view's PR: a late event must not write into another PR's drafts.
+      this.drafts.set(key, target, state.value(), this.pk);
       cx.notify();
     });
     const box = { state, target };
@@ -216,10 +264,17 @@ export class Review {
     return box;
   }
 
-  clearBox(key) {
-    this.drafts.delete(key);
+  /**
+   * After `body` was posted from box `key`: drop the draft and empty the box,
+   * but only while they still hold exactly what was posted (text typed during
+   * the post survives). Returns true when the box was emptied.
+   */
+  clearBox(key, body) {
+    this.drafts.delete(key, { pr: this.pk, ifBody: body });
     const box = this.boxes.get(key);
-    if (box) box.state.set_value("");
+    if (!box || box.state.value().trim() !== body.trim()) return false;
+    box.state.set_value("");
+    return true;
   }
 
   postGeneral(cx) {
@@ -227,7 +282,7 @@ export class Review {
     const body = box?.state.value().trim();
     if (!body) return;
     this.write(cx, "post:g", () => this.provider.addThread(this.ref, { target: { general: true }, body, range: this.range }),
-      () => this.clearBox("g"));
+      () => this.clearBox("g", body));
   }
 
   startReply(cx, thread) {
@@ -243,8 +298,7 @@ export class Review {
     const body = this.boxes.get(key)?.state.value().trim();
     if (!body) return;
     this.write(cx, `post:${key}`, () => this.provider.reply(this.ref, thread.id, body), () => {
-      this.clearBox(key);
-      this.replying.delete(thread.id);
+      if (this.clearBox(key, body)) this.replying.delete(thread.id);
     });
   }
 
@@ -272,6 +326,7 @@ export class Review {
 
   go(cx, page) {
     this.page = page;
+    this.fp.ensure(cx);
     cx.notify();
   }
 
@@ -479,7 +534,7 @@ export class Review {
     const general = (this.threads ?? []).filter((th) => !th.file);
     general.sort((a, b) => (a.status === "resolved") - (b.status === "resolved"));
     const sum = threadSummary(this.threads);
-    const fds = fileDrafts(this.drafts.list(), this.files);
+    const fds = fileDrafts(this.drafts.list(this.pk), this.files);
     const filesWithThreads = [...sum.byFile.entries()];
     const g = this.boxes.get("g");
     const posting = this.busy.has("post:g");
@@ -514,16 +569,9 @@ export class Review {
             .child(`${c.total} thread${c.total === 1 ? "" : "s"} · ${c.open} open`)))))));
   }
 
-  // The per-file diff page (Task 7 replaces the body).
+  // The per-file diff page: see filepage.js.
   filePage(t, path) {
-    const f = (this.files ?? []).find((x) => x.path === path);
-    const threads = (this.threads ?? []).filter((th) => th.file?.path === path);
-    return div().id("rv-file").flex_1().h_full().min_w(0).overflow_y_scrollbar().child(v_flex().px(20).py(16).gap(12)
-      .child(h_flex().gap(8).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().text_color(t.foreground).child(path))
-        .when(Boolean(f), (el) => el.child(badge(t, f.change.toUpperCase(), t[changeLook(f.change).color]))))
-      .child(note(t, "Diff coming."))
-      .children(threads.map((th) => this.thread(t, th))));
+    return this.fp.render(t, path);
   }
 
   render(t) {
