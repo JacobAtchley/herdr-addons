@@ -1,0 +1,25 @@
+{
+  "value": [
+    {
+      "id": 1,
+      "state": "pending",
+      "description": "Coverage running",
+      "context": { "name": "coverage", "genre": "billing-ci" },
+      "creationDate": "2026-11-10T09:31:00.000Z",
+      "updatedDate": "2026-11-10T09:31:00.000Z",
+      "createdBy": { "displayName": "Billing Bot", "id": "a1b2c3d4-0000-4000-8000-0000000000b0" },
+      "targetUrl": "https://ci.example.com/billing-api/runs/1"
+    },
+    {
+      "id": 2,
+      "state": "succeeded",
+      "description": "Coverage 87%",
+      "context": { "name": "coverage", "genre": "billing-ci" },
+      "creationDate": "2026-11-10T09:45:00.000Z",
+      "updatedDate": "2026-11-10T09:45:00.000Z",
+      "createdBy": { "displayName": "Billing Bot", "id": "a1b2c3d4-0000-4000-8000-0000000000b0" },
+      "targetUrl": "https://ci.example.com/billing-api/runs/2"
+    }
+  ],
+  "count": 2
+}

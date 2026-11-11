@@ -1,7 +1,10 @@
 // Azure DevOps pull requests: every active PR in the organization, across all
 // projects, from one org-level REST call (`az rest`, so it uses the az login).
-// Grouped by project; filter All / Mine / To review / Pending, search, click to open.
-// The PR id box looks up any one PR by id, including closed or older ones.
+// Grouped by project; filter All / Mine / To review / Pending, search. Clicking a
+// row opens the review view (review/view.js) in place of the list; the external
+// icon opens the PR in the browser. The PR id box looks up any one PR by id,
+// including closed or older ones, and opens its review.
+// props.review = {project, repoId, id} opens one PR's review directly.
 //
 // Opens as a dialog (mod.open:ado-prs), or as a pane beside a shell.
 
@@ -9,6 +12,9 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, theme, props, closeOverlay, run, notify, home, appHome } from "herdr";
 import { readFile } from "fs/promises";
+import { Review } from "./review/view.js";
+import { createAdoProvider } from "./review/providers/ado.js";
+import { rest } from "./review/azrest.js";
 
 // Settings from addons.json in the herdr-app folder (see the herdr-addons
 // README). Read on each use, so edits apply without reloading the mod.
@@ -101,8 +107,40 @@ export default class AdoPrs extends View {
     this.idBox.on("change", (_e, cx) => {
       if (!this.idBox.value().trim() && this.lookup) { this.lookup = null; cx.notify(); }
     });
+    // The review view, when open: replaces the list.
+    this.review = null;
+    const want = _props?.review ?? props()?.review;
+    if (want?.repoId && want?.id) this.openReview(want, cx);
     this.refresh(cx);
     cx.timer.every(REFRESH_MS, (cx) => this.refresh(cx));
+  }
+
+  openReview({ project, repoId, id, file }, cx) {
+    cx.spawn(async (cx) => {
+      try {
+        await this.ensureOrg();
+        this.review?.dispose();
+        this.review = new Review(this.reviewHost(), { project, repoId, id, file }, cx);
+      } catch (e) {
+        notify({ title: "Couldn't open pull request", body: String(e?.message ?? e), level: "error" });
+      }
+      cx.notify();
+    });
+  }
+
+  reviewHost() {
+    const self = this;
+    return {
+      get org() { return self.org; },
+      // The review view speaks only the neutral provider interface (model.js).
+      get provider() {
+        if (self.providerOrg !== self.org) { self.provider = createAdoProvider({ rest, org: self.org }); self.providerOrg = self.org; }
+        return self.provider;
+      },
+      back(cx) { self.review = null; cx.notify(); },
+      notify: (msg) => notify({ title: "Pull request", body: msg, level: "error" }),
+      chrome: (t) => (props()?.overlay ? [this.iconButton(t, "rv-close", "mods/ado-prs/x.svg", "Close", () => this.dismiss())] : []),
+    };
   }
 
   refresh(cx) {
@@ -148,7 +186,7 @@ export default class AdoPrs extends View {
     if (!/^\d+$/.test(raw)) { this.lookup = { id: raw, error: "Enter a numeric pull request id" }; cx.notify(); return; }
     const id = Number(raw);
     const known = (this.prs ?? []).find((pr) => pr.id === id);
-    if (known) { this.lookup = { id, pr: { ...known, status: "active" } }; cx.notify(); return; }
+    if (known) { this.lookup = { id, pr: { ...known, status: "active" } }; this.openReview(known, cx); return; }
     this.lookup = { id, loading: true };
     cx.notify();
     cx.spawn(async (cx) => {
@@ -157,6 +195,7 @@ export default class AdoPrs extends View {
         const url = `https://dev.azure.com/${this.org}/_apis/git/pullrequests/${id}?api-version=7.1`;
         const pr = JSON.parse(await az(["rest", "--resource", ADO_RESOURCE, "-u", url, "--query", ONE_QUERY, "-o", "json"]));
         if (this.lookup?.id === id) this.lookup = { id, pr };
+        if (pr && this.lookup?.id === id) this.openReview(pr, cx);
         if (pr && !(id in this.threads)) this.loadThreads(cx, [pr]);
       } catch (e) {
         const msg = String(e?.message ?? e);
@@ -200,6 +239,11 @@ export default class AdoPrs extends View {
       .when(c.resolved > 0, (el) => el.child(div().text_color(t.working).child(`✓${c.resolved}`)));
   }
 
+  // The host is closing this copy: write any pending comment draft now.
+  async close() {
+    if (this.review) await this.review.drafts.flush().catch(() => {});
+  }
+
   dismiss() {
     const o = props()?.overlay;
     if (o) closeOverlay(o);
@@ -215,7 +259,7 @@ export default class AdoPrs extends View {
   }
 
   // A new tab with Claude Code reviewing this one PR via the reviewing-ado-open-prs skill.
-  async review(pr) {
+  async claudeReview(pr) {
     const task = [
       `Use the reviewing-ado-open-prs skill to review this one pull request (skip building the queue; review only this PR):`,
       `Org https://dev.azure.com/${this.org}, project ${pr.project}. PR ${pr.id}, repo ${pr.repo}, "${pr.title}".`,
@@ -317,7 +361,7 @@ export default class AdoPrs extends View {
     const closed = pr.status && pr.status !== "active" ? String(pr.status).toUpperCase() : null;
     return h_flex().id(`${key}-${pr.id}`).px(12).py(7).gap(12).items_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover))
-      .on_click(() => this.open(pr))
+      .on_click((_e, cx) => this.openReview(pr, cx))
       .child(div().flex_none().w(3).h(30).rounded(2).bg(review ? t.accent : this.mine(pr) ? t.done : "#00000000"))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(h_flex().gap(8).items_center().min_w(0)
@@ -332,7 +376,7 @@ export default class AdoPrs extends View {
       .child(this.comments(t, pr, key))
       .child(div().flex_none().w(32).text_size(11.5).text_color(t.dim).child(ago(pr.created)))
       .child(h_flex().flex_none().gap(2)
-        .child(this.action(t, `rv-${key}-${pr.id}`, "review.svg", "Review with Claude Code", () => this.review(pr)))
+        .child(this.action(t, `rv-${key}-${pr.id}`, "review.svg", "Review with Claude Code", () => this.claudeReview(pr)))
         .child(this.action(t, `sl-${key}-${pr.id}`, "slack.svg", "Copy Slack message", (cx) => {
           cx.write_to_clipboard(this.slackText(pr));
           notify({ title: "Slack message copied", body: `!${pr.id} ${pr.title}`, level: "info", timeout: 2000 });
@@ -430,6 +474,9 @@ export default class AdoPrs extends View {
 
   render() {
     const t = theme();
+    if (this.review) {
+      return v_flex().size_full().min_h(0).overflow_hidden().bg(t.surface).text_color(t.foreground).child(this.review.render(t));
+    }
     const list = this.visible();
     return v_flex().size_full().min_h(0).overflow_hidden().bg(t.surface).text_color(t.foreground)
       .child(this.header(t, list.length))

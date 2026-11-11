@@ -36,6 +36,8 @@ The screenshots use made-up data.
 - `python3` for `ado-standup`, `cc-usage` and `dd-attention`.
 - Azure DevOps mods: the [Azure CLI](https://learn.microsoft.com/cli/azure/) with the
   `azure-devops` extension, and `az login`. All calls go through your own az login.
+- `bat` (`brew install bat`) for syntax highlighting in the pull request review view;
+  without it diffs show plain text.
 - Claude Code buttons: `claude` on your PATH.
 - Datadog: an API key and an Application key (see Settings).
 

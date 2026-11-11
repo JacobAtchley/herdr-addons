@@ -215,7 +215,8 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
   Every tool's "Open beside this pane" closes the dialog and runs `pane.split`
   to the right with the same mod. Work items passes `{detail: id}` so the open
   item stays open.
-- **Rows.** Clicking a PR row opens it in the browser. A pipeline row opens its
+- **Rows.** Clicking a PR row opens its review view (below); the external-link
+  icon opens it in the browser. A pipeline row opens its
   detail. A work item row opens its details. A standup row opens its URL. Action
   icons stop the click from reaching the row.
 - **Filters and search.** Filtering is instant and local. Search matches title,
@@ -225,6 +226,36 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - **PR filters.** "Mine" means you wrote it. "To review" means you are a
   direct reviewer with no vote yet or "waiting for author", on someone else's
   PR. "Pending" means not a draft and nobody has voted.
+- **PR review view.** Opens in the same dialog or pane, with a back arrow to the
+  list. It can also be opened with props `{review: {project, repoId, id}}`, or
+  by typing an id into the PR id box in the list header.
+  - Header: `#id`, title, repo, `source → target`, author and age, a
+    Publish / Mark as draft toggle, and the vote buttons: Wait for author,
+    Reject, Approve (Approve / Approve with suggestions) and Reset. Votes are
+    10, 5, 0, -5 and -10. The current vote is highlighted. A refused write
+    (a non-author toggling draft, a vote on a closed PR) shows the error and
+    keeps the server's state.
+  - Status strip: reviewer chips (vote, "required") and gate chips. A build
+    gate opens that run in `ado-pipelines`, and a linked work item opens in
+    `ado-workitems`, both in a split pane beside the review. Other gates show
+    their reason in a tooltip. The PR refreshes every 30 s while a build or check gate is running (policy gates waiting on votes don't trigger it).
+  - Left list: Overview, then the changed files with a change letter and a
+    thread count. The Overview has the description, linked work items, general
+    threads with a new-comment box, and a summary of file threads.
+  - File page: the diff with threads inline, Reply, Resolve and Reactivate.
+    Resolved threads start collapsed. Click a line number to comment, and
+    shift-click a second one to comment on a range. Syntax colors come from
+    `bat` (`Catppuccin Mocha` in dark, `Catppuccin Latte` in light) and sit
+    under the add/delete tints. Without `bat` the toolbar says "Install bat
+    for syntax highlighting (brew install bat)" and diffs are plain text.
+  - Toggles: Unified / Split, and All changes / Since last look (disabled when
+    there is no earlier look). Unified / Split is remembered per mod copy.
+    "Since last look" compares against the version you saw on your previous
+    visit, kept per mod copy, so a dialog and a split pane track it separately.
+    The view always opens on All changes.
+  - Unsent comments are saved to `~/.config/herdr-app/cache/ado-prs/drafts.json`
+    and deleted after 7 days. They survive going back, closing and restarts.
+    A draft whose line is gone shows as an unplaced draft.
 - **Review with Claude Code** opens a new tab named `Review !id` running
   `claude --model <model>` in `claude.folder`. Its task is to use the
   `reviewing-ado-open-prs` skill on just this PR. Then the dialog closes.
@@ -310,7 +341,17 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
   - herdr: `exec`, `theme`, `props`, `closeOverlay`, `run` (`tab.new`,
     `pane.split`), `notify`, `home`, `appHome`, and `cx.write_to_clipboard`.
   - Art: `pr`, `review`, `slack`, `external`, `refresh`, `panel-right`, `x`,
-    `chev-down`, `chev-right`.
+    `chev-down`, `chev-right`, `back`.
+  - `review/*.js` is the review view. `view.js` is the screen and
+    `filepage.js` the diff page. `highlight.js` runs `bat`, `azrest.js` wraps
+    `az rest`, and `ui/parts.js` holds shared widgets. `providers/ado.js` is the
+    only file that knows ADO's shapes; the rest speak a neutral model. The pure
+    modules (`anchor`, `ansi`, `diff`, `drafts`, `model`, `rows`, `summary`)
+    don't import herdr and are unit-tested:
+    `node --test "azure-devops/tests/ado-prs/*.test.mjs"`.
+  - Review calls use `az rest --resource 499b84ac-1321-427f-aa17-267ca6975798`
+    with `api-version=7.1`. Policy evaluations, statuses and `connectionData`
+    use `7.1-preview.1`.
 - **`mods/ado-pipelines/`**: `mod.json`
   `{"place":"none","title":"Pipelines","overlay":{"kind":"dialog","width":0.9,"height":0.86}}`.
   - Projects come from `/_apis/projects?$top=500`. Then each project is asked
@@ -418,6 +459,9 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - Switching a field from HTML to Markdown (`/multilineFieldsFormat/<ref>`) is
   one way in ADO, and the button's tooltip says so. An empty field with no
   format yet is saved as Markdown.
+- Syntax highlighting needs `bat` on the PATH (`brew install bat`). Highlight
+  each whole file version once, not per hunk, so multi-line strings color
+  correctly. Files over 20,000 lines or about 1 MB show "Too large to show".
 - Thread counts and pipeline lists cost one call per PR and one per project.
   Keep the concurrency caps: 6 for threads, 4 for work item batches, and 8 in
   standup.py.

@@ -5,3 +5,6 @@ __pycache__/
 .DS_Store
 # Personal settings live in the herdr-app folder, never here.
 addons.json
+# Local worktrees and agent scratch.
+.claude/
+.superpowers/

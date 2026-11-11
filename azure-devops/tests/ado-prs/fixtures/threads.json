@@ -1,0 +1,135 @@
+{
+  "value": [
+    {
+      "id": 501,
+      "publishedDate": "2026-11-09T15:04:20.000Z",
+      "lastUpdatedDate": "2026-11-09T15:04:20.000Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Microsoft.VisualStudio.Services.TFS", "id": "00000002-0000-8888-8000-000000000000" },
+          "content": "Dana Ortiz updated the pull request status to Active",
+          "publishedDate": "2026-11-09T15:04:20.000Z",
+          "lastUpdatedDate": "2026-11-09T15:04:20.000Z",
+          "commentType": "system"
+        }
+      ],
+      "status": "unknown",
+      "threadContext": null,
+      "properties": {},
+      "isDeleted": false
+    },
+    {
+      "id": 502,
+      "publishedDate": "2026-11-09T16:00:00.000Z",
+      "lastUpdatedDate": "2026-11-09T16:10:00.000Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Sam Lee", "id": "a1b2c3d4-0000-4000-8000-000000000002" },
+          "content": "never mind",
+          "publishedDate": "2026-11-09T16:00:00.000Z",
+          "commentType": "text",
+          "isDeleted": true
+        }
+      ],
+      "status": "active",
+      "threadContext": null,
+      "isDeleted": true
+    },
+    {
+      "id": 503,
+      "publishedDate": "2026-11-10T10:00:00.000Z",
+      "lastUpdatedDate": "2026-11-10T11:00:00.000Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Sam Lee", "id": "a1b2c3d4-0000-4000-8000-000000000002" },
+          "content": "Should the BOM be **opt-in**?",
+          "publishedDate": "2026-11-10T10:00:00.000Z",
+          "lastUpdatedDate": "2026-11-10T10:00:00.000Z",
+          "commentType": "text"
+        },
+        {
+          "id": 2,
+          "parentCommentId": 1,
+          "author": { "displayName": "Dana Ortiz", "id": "a1b2c3d4-0000-4000-8000-000000000001" },
+          "content": "Yes, defaults to false.",
+          "publishedDate": "2026-11-10T11:00:00.000Z",
+          "lastUpdatedDate": "2026-11-10T11:00:00.000Z",
+          "commentType": "text"
+        },
+        {
+          "id": 3,
+          "parentCommentId": 1,
+          "author": { "displayName": "Dana Ortiz", "id": "a1b2c3d4-0000-4000-8000-000000000001" },
+          "content": "(removed)",
+          "publishedDate": "2026-11-10T11:01:00.000Z",
+          "commentType": "text",
+          "isDeleted": true
+        }
+      ],
+      "status": "active",
+      "threadContext": {
+        "filePath": "/src/Billing.Api/Export/CsvExporter.cs",
+        "rightFileStart": { "line": 43, "offset": 1 },
+        "rightFileEnd": { "line": 45, "offset": 18 }
+      },
+      "pullRequestThreadContext": {
+        "changeTrackingId": 2,
+        "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 2 }
+      },
+      "isDeleted": false
+    },
+    {
+      "id": 504,
+      "publishedDate": "2026-11-10T10:05:00.000Z",
+      "lastUpdatedDate": "2026-11-10T10:05:00.000Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Dana Ortiz", "id": "a1b2c3d4-0000-4000-8000-000000000001" },
+          "content": "This removed check was load-bearing.",
+          "publishedDate": "2026-11-10T10:05:00.000Z",
+          "lastUpdatedDate": "2026-11-10T10:05:00.000Z",
+          "commentType": "text"
+        }
+      ],
+      "status": "fixed",
+      "threadContext": {
+        "filePath": "/src/Billing.Api/Export/CsvExporter.cs",
+        "leftFileStart": { "line": 12, "offset": 1 },
+        "leftFileEnd": { "line": 12, "offset": 31 }
+      },
+      "pullRequestThreadContext": {
+        "changeTrackingId": 2,
+        "iterationContext": { "firstComparingIteration": 1, "secondComparingIteration": 2 }
+      },
+      "isDeleted": false
+    },
+    {
+      "id": 505,
+      "publishedDate": "2026-11-10T12:00:00.000Z",
+      "lastUpdatedDate": "2026-11-10T12:00:00.000Z",
+      "comments": [
+        {
+          "id": 1,
+          "parentCommentId": 0,
+          "author": { "displayName": "Sam Lee", "id": "a1b2c3d4-0000-4000-8000-000000000002" },
+          "content": "Overall looks good; one question inline.",
+          "publishedDate": "2026-11-10T12:00:00.000Z",
+          "lastUpdatedDate": "2026-11-10T12:00:00.000Z",
+          "commentType": "text"
+        }
+      ],
+      "status": "active",
+      "threadContext": null,
+      "isDeleted": false
+    }
+  ],
+  "count": 5
+}
