@@ -235,12 +235,13 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     10, 5, 0, -5 and -10. The current vote is highlighted. A refused write
     (a non-author toggling draft, a vote on a closed PR) shows the error and
     keeps the server's state.
-  - Status strip: reviewer chips (vote, "required") and gate chips. A build
+  - Status strip: reviewer chips (vote, "required"), gate chips, and a
+    "Work item #id" chip per linked item (title in the tooltip). A build
     gate opens that run in `ado-pipelines`, and a linked work item opens in
     `ado-workitems`, both in a split pane beside the review. Other gates show
     their reason in a tooltip. The PR refreshes every 30 s while a build or check gate is running (policy gates waiting on votes don't trigger it).
   - Left list: Overview, then the changed files with a change letter and a
-    thread count. The Overview has the description, linked work items, general
+    thread count. The Overview has the linked work items first, then the description, general
     threads with a new-comment box, and a summary of file threads.
   - File page: the diff with threads inline, Reply, Resolve and Reactivate.
     Resolved threads start collapsed. Click a line number to comment, and
@@ -255,7 +256,11 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     The view always opens on All changes.
   - Unsent comments are saved to `~/.config/herdr-app/cache/ado-prs/drafts.json`
     and deleted after 7 days. They survive going back, closing and restarts.
-    A draft whose line is gone shows as an unplaced draft.
+    A draft whose line is gone shows as an unplaced draft. Every mod copy
+    (the dialog, split panes) shares the file: a save takes the
+    `drafts.json.lock` folder, re-reads the file, replaces only the PRs that
+    copy changed, and renames a temp file over it. If the file can't be read,
+    drafts aren't saved (an error says so) until it's fixed or deleted.
 - **Review with Claude Code** opens a new tab named `Review !id` running
   `claude --model <model>` in `claude.folder`. Its task is to use the
   `reviewing-ado-open-prs` skill on just this PR. Then the dialog closes.
