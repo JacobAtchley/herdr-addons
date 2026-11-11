@@ -50,7 +50,18 @@ export class Drafts {
     const raced = (this._data = {});
     this._loading = true;
     try { await flushed; } catch (e) { this._onError?.(e); }
-    const loaded = (await this._load()) ?? {}; // on failure stay _loading: never write partial data
+    let loaded;
+    try {
+      loaded = (await this._load()) ?? {};
+    } catch (e) {
+      // _data is partial: block all writes (_unsafe) until an open() succeeds.
+      // _loading must be cleared so flush() never waits on an open that failed.
+      this._loading = false;
+      this._unsafe = true;
+      this._onError?.(e);
+      throw e;
+    }
+    this._unsafe = false;
     const mine = raced[pr];
     const dirty = this._dirty || !!(mine && Object.keys(mine).length);
     this._data = loaded;
@@ -97,8 +108,11 @@ export class Drafts {
 
   // Force any pending debounced save and wait for in-flight saves.
   async flush() {
+    // Never wait on the open() that is itself calling flush(): _open() calls
+    // flush() before setting _loading, so _loading is only true for a load in
+    // progress started by an earlier call.
     if (this._loading && this._opening) await this._opening.catch(() => {});
-    if (this._loading) return; // load failed: data is partial, never write it
+    if (this._unsafe) return; // last load failed: data is partial, never write it
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
@@ -109,6 +123,7 @@ export class Drafts {
 
   _schedule() {
     if (this._loading) { this._dirty = true; return; } // open() re-schedules after merging
+    if (this._unsafe) return;
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._timer = null;
@@ -118,7 +133,7 @@ export class Drafts {
   }
 
   _write() {
-    if (this._loading) return Promise.resolve();
+    if (this._loading || this._unsafe) return Promise.resolve();
     const snapshot = structuredClone(this._data); // taken now, saved in order
     const p = this._inflight.catch(() => {}).then(() => this._save(snapshot));
     this._inflight = p;

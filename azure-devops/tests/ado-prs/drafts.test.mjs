@@ -140,6 +140,30 @@ test("overlapping open() calls are serialized; stale open cannot clobber", async
   assert.equal(m.peek()["o/r/C"].c.body, "C");
 });
 
+test("failed load reports to onError; retry open() works and flush completes", { timeout: 3000 }, async () => {
+  const m = mem({ "o/r/9": { g: { body: "keep", target: { general: true }, updated: 5 } } });
+  const errs = [];
+  const boom = new Error("read");
+  let calls = 0;
+  let saves = 0;
+  const d = new Drafts({
+    load: async () => { if (calls++ === 0) throw boom; return m.peek(); },
+    save: async (o) => { saves++; await m.save(o); },
+    now: () => 10,
+    onError: (e) => errs.push(e),
+  });
+  await assert.rejects(d.open("o/r/B"), /read/);
+  assert.deepEqual(errs, [boom]);
+  await d.flush(); // must not hang or write partial data
+  assert.equal(saves, 0);
+  await d.open("o/r/B");
+  assert.equal(d.list().length, 0);
+  d.set("g", { general: true }, "hello");
+  await d.flush();
+  assert.equal(m.peek()["o/r/B"].g.body, "hello");
+  assert.equal(m.peek()["o/r/9"].g.body, "keep");
+});
+
 test("onError is called when a debounced save rejects; flush rejects", async () => {
   const errs = [];
   const boom = new Error("disk");
