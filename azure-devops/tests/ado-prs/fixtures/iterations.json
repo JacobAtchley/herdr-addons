@@ -1,0 +1,29 @@
+{
+  "value": [
+    {
+      "id": 1,
+      "description": "Invoice export: support CSV with BOM",
+      "author": { "displayName": "Dana Ortiz", "id": "a1b2c3d4-0000-4000-8000-000000000001" },
+      "createdDate": "2026-11-09T15:04:12.381Z",
+      "updatedDate": "2026-11-09T15:04:12.381Z",
+      "sourceRefCommit": { "commitId": "aaaa000000000000000000000000000000000001" },
+      "targetRefCommit": { "commitId": "1111111111111111111111111111111111111111" },
+      "commonRefCommit": { "commitId": "cccc000000000000000000000000000000000001" },
+      "hasMoreCommits": false,
+      "reason": "create"
+    },
+    {
+      "id": 2,
+      "description": "Address review feedback",
+      "author": { "displayName": "Dana Ortiz", "id": "a1b2c3d4-0000-4000-8000-000000000001" },
+      "createdDate": "2026-11-10T09:30:00.000Z",
+      "updatedDate": "2026-11-10T09:30:00.000Z",
+      "sourceRefCommit": { "commitId": "aaaa000000000000000000000000000000000002" },
+      "targetRefCommit": { "commitId": "1111111111111111111111111111111111111111" },
+      "commonRefCommit": { "commitId": "cccc000000000000000000000000000000000002" },
+      "hasMoreCommits": false,
+      "reason": "push"
+    }
+  ],
+  "count": 2
+}

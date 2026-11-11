@@ -1,0 +1,47 @@
+{
+  "value": [
+    {
+      "configuration": {
+        "id": 31,
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": { "id": "0609b952-1397-4640-95ec-e00a01b2c241", "displayName": "Build" },
+        "settings": { "buildDefinitionId": 77, "displayName": "billing-api CI", "validDuration": 720 }
+      },
+      "artifactId": "vstfs:///CodeReview/CodeReviewId/0c7e5a22-91b4-4d3f-8f10-2e6b7a9d4c01/482",
+      "evaluationId": "e0000000-0000-4000-8000-000000000031",
+      "startedDate": "2026-11-10T09:31:00.000Z",
+      "completedDate": "2026-11-10T09:40:00.000Z",
+      "status": "rejected",
+      "context": { "buildId": 9001, "buildDefinitionId": 77, "buildDefinitionName": "billing-api CI", "buildIsNotCurrent": false }
+    },
+    {
+      "configuration": {
+        "id": 32,
+        "isEnabled": true,
+        "isBlocking": true,
+        "type": { "id": "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd", "displayName": "Minimum number of reviewers" },
+        "settings": { "minimumApproverCount": 2, "creatorVoteCounts": false }
+      },
+      "artifactId": "vstfs:///CodeReview/CodeReviewId/0c7e5a22-91b4-4d3f-8f10-2e6b7a9d4c01/482",
+      "evaluationId": "e0000000-0000-4000-8000-000000000032",
+      "startedDate": "2026-11-09T15:04:13.000Z",
+      "status": "running",
+      "context": null
+    },
+    {
+      "configuration": {
+        "id": 33,
+        "isEnabled": true,
+        "isBlocking": false,
+        "type": { "id": "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e", "displayName": "Work item linking" },
+        "settings": {}
+      },
+      "artifactId": "vstfs:///CodeReview/CodeReviewId/0c7e5a22-91b4-4d3f-8f10-2e6b7a9d4c01/482",
+      "evaluationId": "e0000000-0000-4000-8000-000000000033",
+      "status": "notApplicable",
+      "context": null
+    }
+  ],
+  "count": 3
+}

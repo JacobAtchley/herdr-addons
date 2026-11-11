@@ -1,0 +1,35 @@
+{
+  "changeEntries": [
+    {
+      "changeTrackingId": 1,
+      "changeId": 1,
+      "item": {
+        "objectId": "0000000000000000000000000000000000000d01",
+        "path": "/src/Billing.Api/Export/BomWriter.cs"
+      },
+      "changeType": "add"
+    },
+    {
+      "changeTrackingId": 2,
+      "changeId": 2,
+      "item": {
+        "objectId": "0000000000000000000000000000000000000d02",
+        "originalObjectId": "0000000000000000000000000000000000000e02",
+        "path": "/src/Billing.Api/Export/CsvExporter.cs"
+      },
+      "changeType": "edit, rename",
+      "originalPath": "/src/Billing.Api/Export/CsvExport.cs"
+    },
+    {
+      "changeTrackingId": 3,
+      "changeId": 3,
+      "item": {
+        "originalObjectId": "0000000000000000000000000000000000000e03",
+        "path": "/docs/legacy-export.md"
+      },
+      "changeType": "delete"
+    }
+  ],
+  "nextSkip": 0,
+  "nextTop": 0
+}

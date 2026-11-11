@@ -1,0 +1,17 @@
+{
+  "authenticatedUser": {
+    "id": "a1b2c3d4-0000-4000-8000-000000000002",
+    "descriptor": "Microsoft.IdentityModel.Claims.ClaimsIdentity;example\\sam.lee@example.com",
+    "subjectDescriptor": "aad.ZmFrZS1zdWJqZWN0",
+    "providerDisplayName": "Sam Lee",
+    "isActive": true,
+    "properties": {}
+  },
+  "authorizedUser": {
+    "id": "a1b2c3d4-0000-4000-8000-000000000002",
+    "providerDisplayName": "Sam Lee",
+    "isActive": true
+  },
+  "instanceId": "f0000000-0000-4000-8000-0000000000f0",
+  "locationServiceData": {}
+}
