@@ -9,7 +9,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, TextView, Popover } from "gpui-base";
 import { exec, run, appHome } from "herdr";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, exists, unlink } from "fs/promises";
 import { Drafts, draftKey, prKey } from "./drafts.js";
 import {
   myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, replyDrafts, targetLabel, ago, displayName,
@@ -27,23 +27,65 @@ const OVERVIEW = "overview";
 
 let draftsStore = null;
 let draftsError = () => {};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LOCK_TRIES = 40; // × 25 ms: a lock older than ~1 s is a crashed holder's
+const LOCK_WAIT_MS = 25;
+
 function drafts() {
   if (draftsStore) return draftsStore;
   const dir = `${appHome()}/cache/ado-prs`;
   const path = `${dir}/drafts.json`;
+  const lock = `${path}.lock`;
   draftsStore = new Drafts({
-    // A missing or corrupt file is an empty store; never reject.
+    // Missing file: an empty store. A file that exists but can't be read or
+    // parsed rejects, so it is never overwritten with this copy's drafts only.
     load: async () => {
+      if (!(await exists(path))) return null;
+      const text = await readFile(path, "utf8");
+      let v;
       try {
-        const v = JSON.parse(await readFile(path, "utf8"));
-        return v && typeof v === "object" && !Array.isArray(v) ? v : null;
-      } catch {
-        return null;
+        v = JSON.parse(text);
+      } catch (e) {
+        throw new Error(`Can't read ${path} (${e.message}). Drafts aren't saved until it's fixed or deleted.`);
       }
+      if (!v || typeof v !== "object" || Array.isArray(v)) {
+        throw new Error(`${path} isn't a drafts file. Drafts aren't saved until it's fixed or deleted.`);
+      }
+      return v;
     },
+    // Write a temp file, then rename it over drafts.json (mv in one folder is
+    // an atomic rename): a reader sees the old file or the new one, never half.
     save: async (data) => {
       await mkdir(dir, { recursive: true });
-      await writeFile(path, JSON.stringify(data));
+      const tmp = `${path}.${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
+      await writeFile(tmp, JSON.stringify(data));
+      const r = await exec("mv", ["-f", tmp, path]);
+      if (r.code !== 0) {
+        await unlink(tmp).catch(() => {});
+        throw new Error(`Couldn't save drafts: ${(r.stderr || "mv failed").trim()}`);
+      }
+    },
+    // A lock folder shared by every mod copy (mkdir fails if it exists), so
+    // two copies never interleave their read-merge-write.
+    exclusive: async (fn) => {
+      await mkdir(dir, { recursive: true });
+      let held = false;
+      for (let i = 0; i < LOCK_TRIES && !held; i++) {
+        held = (await exec("mkdir", [lock])).code === 0;
+        if (!held) await sleep(LOCK_WAIT_MS);
+      }
+      if (!held) {
+        // Left behind by a copy that died mid-save: take it over.
+        await exec("rmdir", [lock]);
+        held = (await exec("mkdir", [lock])).code === 0;
+        if (!held) throw new Error(`Couldn't lock ${lock}; drafts will be saved on the next change.`);
+      }
+      try {
+        return await fn();
+      } finally {
+        await exec("rmdir", [lock]).catch(() => {});
+      }
     },
     onError: (e) => draftsError(e),
   });
@@ -450,12 +492,20 @@ export class Review {
       gates.push(div().id("rv-g-err").flex_none().text_size(11.5).text_color(t.blocked)
         .tooltip(pr.gatesError).child("! gates unavailable"));
     }
+    // Linked work items: on every page, click opens the item beside the review.
+    const items = pr.workItems.map((w) => h_flex().id(`rv-swi-${w.id}`).flex_none().gap(4).items_center().text_size(11.5)
+      .cursor_pointer().hover((s) => s.opacity(0.75))
+      .tooltip(`${w.title ? `${w.title}\n` : ""}Click to open beside this view`)
+      .on_click(() => this.split("ado-workitems", { detail: w.id }))
+      .child(div().text_color(t.dim).child("Work item"))
+      .child(div().text_color(t.accent).child(`#${w.id}`)));
     const sep = () => div().flex_none().w(1).h(14).bg(t.border);
     return h_flex().flex_none().px(16).py(6).gap(12).items_center().border_b(1).border_color(t.border)
       .child(h_flex().flex_1().min_w(0).gap(12).items_center().flex_wrap()
         .children(reviewers.length ? reviewers : [note(t, "No reviewers")])
         .child(sep())
-        .children(gates.length ? gates : [note(t, "No gates")]))
+        .children(gates.length ? gates : [note(t, "No gates")])
+        .when(items.length > 0, (el) => el.child(sep()).children(items)))
       .child(div().id("rv-count").flex_none().text_size(11.5).text_color(sum.open ? t.foreground : t.dim)
         .tooltip(`${sum.total} threads, ${sum.open} open`)
         .child(this.threads ? `💬 ${sum.total} · ${sum.open} open` : "💬 …"));
@@ -570,16 +620,16 @@ export class Review {
     const g = this.boxes.get("g");
     const posting = this.busy.has("post:g");
     return div().id("rv-overview").flex_1().h_full().min_w(0).overflow_y_scrollbar().child(v_flex().px(20).py(16).gap(18)
-      .child(v_flex().gap(8).child(section(t, "Description"))
-        .child(pr.description.trim()
-          ? TextView.markdown(`rv-desc-${pr.id}`, pr.description).w_full().text_size(13).selectable(true).on_link_click((url) => this.browse(url))
-          : note(t, "No description.")))
       .when(pr.workItems.length > 0, (el) => el.child(v_flex().gap(4).child(section(t, "Work items", pr.workItems.length))
         .children(pr.workItems.map((w) => h_flex().id(`rv-wi-${w.id}`).px(8).py(4).gap(8).items_center().rounded(6).cursor_pointer()
           .hover((s) => s.bg(t.hover)).tooltip("Open beside this view")
           .on_click(() => this.split("ado-workitems", { detail: w.id }))
           .child(div().flex_none().text_size(12).text_color(t.accent).child(`#${w.id}`))
           .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(w.title ?? ""))))))
+      .child(v_flex().gap(8).child(section(t, "Description"))
+        .child(pr.description.trim()
+          ? TextView.markdown(`rv-desc-${pr.id}`, pr.description).w_full().text_size(13).selectable(true).on_link_click((url) => this.browse(url))
+          : note(t, "No description.")))
       .child(v_flex().gap(10).child(section(t, "Comments", this.threads ? `${sum.general} · ${sum.generalOpen} open` : "…"))
         .when(Boolean(this.threads) && !general.length, (el) => el.child(note(t, "No general comments.")))
         .children(general.map((th) => this.thread(t, th)))

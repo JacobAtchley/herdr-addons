@@ -39,10 +39,13 @@ export function prKey(ref) {
 export class Drafts {
   static MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 
-  constructor({ load, save, now = Date.now, onError }) {
+  // exclusive(fn): runs fn (one re-read + save) while holding a lock shared
+  // with the other instances, so two saves can't interleave read and write.
+  constructor({ load, save, now = Date.now, onError, exclusive = (fn) => fn() }) {
     this._onError = onError;
     this._load = load;
     this._save = save;
+    this._exclusive = exclusive;
     this._now = now;
     this._data = {};
     this._pr = null;
@@ -170,7 +173,8 @@ export class Drafts {
       this._timer = null;
       await this._write();
     }
-    await this._inflight;
+    // A save started elsewhere reports its own failure (onError / its caller).
+    await this._inflight.catch(() => {});
   }
 
   _schedule() {
@@ -195,7 +199,9 @@ export class Drafts {
     for (const p of touched) parts[p] = this._data[p] ? structuredClone(this._data[p]) : null;
     const p = this._inflight.catch(() => {}).then(async () => {
       try {
-        await this._save(mergeDrafts(await this._load(), parts));
+        // load() rejects when the file exists but can't be read: never save
+        // then, or the other instances' PRs in it would be dropped.
+        await this._exclusive(async () => this._save(mergeDrafts(await this._load(), parts)));
       } catch (e) {
         for (const k of touched) this._touched.add(k);
         throw e;
