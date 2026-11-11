@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { diffLines } from "../../mods/ado-prs/review/diff.js";
+import { placeDrafts } from "../../mods/ado-prs/review/anchor.js";
 import {
   tooLarge, sinceLastLook, displayItems, numWidth, gutterWidth, lineAt, actionAt, selectLines, lineLengths, draftFits,
   ACTION_W, ACTION_GAP, MAX_LINES, wordChunks,
@@ -127,9 +128,22 @@ test("wordChunks: words keep trailing spaces and their span's color; indentation
   assert.deepEqual(wordChunks([{ text: "" }]), []);
 });
 
-test("draftFits: left drafts need the same base; right and legacy drafts always fit", () => {
+test("draftFits: left drafts need the same base, right drafts the same latest push; legacy drafts fit", () => {
   assert.equal(draftFits({ side: "left", range: { from: 2, to: 4 } }, { from: 2, to: 5 }), true);
   assert.equal(draftFits({ side: "left", range: { from: null, to: 4 } }, { from: 2, to: 4 }), false);
+  // Right side: fresh (same `to`, base irrelevant) vs stale (a newer push moved the lines).
   assert.equal(draftFits({ side: "right", range: { from: null, to: 4 } }, { from: 2, to: 4 }), true);
+  assert.equal(draftFits({ side: "right", range: { from: null, to: 3 } }, { from: null, to: 4 }), false);
   assert.equal(draftFits({ side: "left" }, { from: 2, to: 4 }), true);
+  assert.equal(draftFits({ side: "right" }, { from: 2, to: 4 }), true);
+});
+
+test("a stale right-side draft goes to unplaced instead of re-anchoring on the same line number", () => {
+  // Draft on right line 3 written at iteration 3; iteration 4 inserted lines above it.
+  const rows = diffLines(["a", "b"], ["x", "y", "a", "b"]);
+  const draft = { key: "k", target: { file: "f", side: "right", line: 3, range: { from: null, to: 3 } }, body: "on b" };
+  const range = { from: null, to: 4 };
+  const fits = [draft].filter((d) => draftFits(d.target, range));
+  assert.equal(fits.length, 0);
+  assert.equal(placeDrafts(rows, fits, "f").byRow.size, 0);
 });

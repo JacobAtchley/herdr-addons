@@ -172,7 +172,7 @@ export class FilePages {
     const key = draftKey(target);
     if (sel.endLine != null && anchor) {
       // Turn the anchor's single-line composer into the range, keeping its text.
-      const oldKey = draftKey({ file: path, side: anchor.side, line: anchor.line });
+      const oldKey = draftKey({ file: path, side: anchor.side, line: anchor.line, range });
       const text = rv.boxes.get(oldKey)?.state.value() ?? rv.drafts.get(oldKey, rv.pk)?.body ?? "";
       if (oldKey !== key && text && !rv.drafts.get(key, rv.pk)) rv.drafts.set(key, target, text, rv.pk);
       if (oldKey !== key && !rv.busy.has(`post:${oldKey}`)) {
@@ -514,7 +514,11 @@ export class FilePages {
     push(`ud:${d.key}`, () => this.place(t, null, true, v_flex().gap(4)
       .child(div().text_size(11).text_color(t.working).child(targetLabel(d.target)))
       .child(div().text_size(12.5).text_color(t.foreground).child(d.body || "(empty)")), { accent: t.working, first: true }));
-    const actions = [{ id: "discard", label: "Discard", run: (cx) => this.discard(cx, d.key) }];
+    // Copy lets the text be re-posted on the right line; Discard deletes it.
+    const actions = [
+      { id: "copy", label: "Copy", run: (cx) => cx.write_to_clipboard(d.body ?? "") },
+      { id: "discard", label: "Discard", run: (cx) => this.discard(cx, d.key) },
+    ];
     push(`ud:${d.key}:a`, () => this.place(t, null, true, div().pt(6).child(this.actionRow(t, actions)), { accent: t.working, last: true }),
       { kind: "actions", side: null, top: true, actions });
   }

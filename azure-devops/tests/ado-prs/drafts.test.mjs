@@ -16,6 +16,21 @@ test("keys", () => {
   assert.equal(prKey({ org: "o", project: "p", repoId: "r", id: 5 }), "o/r/5");
 });
 
+test("file draft keys include the version their line numbers belong to", () => {
+  const f = "src/A.cs";
+  assert.equal(draftKey({ file: f, side: "right", line: 42, range: { from: null, to: 3 } }), "f:right:src/A.cs:42-42@3");
+  assert.equal(draftKey({ file: f, side: "left", line: 7, range: { from: null, to: 3 } }), "f:left:src/A.cs:7-7@base");
+  assert.equal(draftKey({ file: f, side: "left", line: 7, range: { from: 2, to: 3 } }), "f:left:src/A.cs:7-7@2");
+  // Collision case: a stale right-side draft (iteration 3) and a click on the
+  // same line number at iteration 4 get different keys (separate boxes).
+  const stale = draftKey({ file: f, side: "right", line: 42, range: { from: null, to: 3 } });
+  const fresh = draftKey({ file: f, side: "right", line: 42, range: { from: null, to: 4 } });
+  assert.notEqual(stale, fresh);
+  // Right-side keys don't depend on the base; left-side keys don't depend on the latest push.
+  assert.equal(draftKey({ file: f, side: "right", line: 1, range: { from: 2, to: 4 } }), draftKey({ file: f, side: "right", line: 1, range: { from: null, to: 4 } }));
+  assert.equal(draftKey({ file: f, side: "left", line: 1, range: { from: 2, to: 4 } }), draftKey({ file: f, side: "left", line: 1, range: { from: 2, to: 5 } }));
+});
+
 test("prunes drafts older than 7 days across PRs", async () => {
   const now = 100 * DAY;
   const m = mem({

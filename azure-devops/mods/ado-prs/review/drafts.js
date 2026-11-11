@@ -6,7 +6,12 @@ const DEBOUNCE_MS = 300;
 export function draftKey(t) {
   if (t.general) return "g";
   if (t.thread != null) return `t:${t.thread}`;
-  return `f:${t.side}:${t.file}:${t.line}-${t.endLine ?? t.line}`;
+  // A file draft's line numbers belong to one version (left: the base,
+  // right: the latest push); it is part of the key so a draft from another
+  // version never shares a box with a line clicked in this one.
+  const base = `f:${t.side}:${t.file}:${t.line}-${t.endLine ?? t.line}`;
+  if (!t.range) return base;
+  return `${base}@${t.side === "left" ? t.range.from ?? "base" : t.range.to}`;
 }
 
 export function prKey(ref) {
