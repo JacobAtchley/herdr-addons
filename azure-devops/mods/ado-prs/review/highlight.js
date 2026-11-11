@@ -2,7 +2,8 @@
 // exec has no stdin, so the source goes through a temp file in the app cache.
 import { exec, appHome } from "herdr";
 import { mkdir, writeFile } from "fs/promises";
-import { parseAnsi } from "./ansi.js";
+import { parseAnsi, fitLines } from "./ansi.js";
+import { splitLines } from "./diff.js";
 
 const BATS = ["bat", "/opt/homebrew/bin/bat", "/usr/local/bin/bat"];
 const memo = new Map();
@@ -59,7 +60,7 @@ export async function highlightFile(path, text, dark) {
       "--color=always", "--style=plain", "--paging=never", "--tabs=4",
       `--file-name=${path}`, `--theme=${dark ? "Catppuccin Mocha" : "Catppuccin Latte"}`, file,
     ], { timeout: 15000 });
-    if (r.code === 0) result = parseAnsi(r.stdout);
+    if (r.code === 0) result = fitLines(parseAnsi(r.stdout), splitLines(text).length);
   } catch { /* leave null */ }
   memo.set(key, result);
   return result;

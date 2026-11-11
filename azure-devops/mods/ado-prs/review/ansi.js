@@ -59,3 +59,10 @@ export function isDarkTheme(colors) {
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5;
 }
+
+/** Trim (or pad with empty lines) to exactly `count` lines, e.g. bat's trailing newline. */
+export function fitLines(lines, count) {
+  const out = lines.slice(0, count);
+  while (out.length < count) out.push([]);
+  return out;
+}
