@@ -27,21 +27,39 @@ export class Drafts {
     this._inflight = Promise.resolve();
   }
 
-  async open(pr) {
-    // Never drop the previous PR's pending edits: flush() snapshots them
-    // synchronously, so we can switch PR immediately and collect any set()
-    // that races with the awaited flush/load below.
+  // Overlapping open() calls are serialized: each runs after the previous one
+  // has finished, so a stale continuation can never clobber newer state.
+  open(pr) {
+    const prev = this._opening;
+    const p = (async () => {
+      if (prev) await prev.catch(() => {});
+      await this._open(pr);
+    })();
+    this._opening = p;
+    return p;
+  }
+
+  async _open(pr) {
+    // Persist the previous PR's pending edits first (data is complete here).
+    // flush() snapshots synchronously, so we can switch PR right away.
     const flushed = this.flush();
+    // While loading, _data is partial: nothing may be written (_loading) or
+    // other PRs' drafts on disk would be wiped. set()s made meanwhile are
+    // collected in `raced` and merged after the load.
     this._pr = pr;
     const raced = (this._data = {});
+    this._loading = true;
     try { await flushed; } catch (e) { this._onError?.(e); }
-    const loaded = (await this._load()) ?? {};
+    const loaded = (await this._load()) ?? {}; // on failure stay _loading: never write partial data
     const mine = raced[pr];
+    const dirty = this._dirty || !!(mine && Object.keys(mine).length);
     this._data = loaded;
     if (mine && Object.keys(mine).length) {
       this._data[pr] = { ...(loaded[pr] ?? {}), ...mine };
-      this._schedule();
     }
+    this._loading = false;
+    this._dirty = false;
+    if (dirty) this._schedule();
     const cutoff = this._now() - Drafts.MAX_AGE_MS;
     let pruned = false;
     for (const [p, map] of Object.entries(this._data)) {
@@ -79,6 +97,8 @@ export class Drafts {
 
   // Force any pending debounced save and wait for in-flight saves.
   async flush() {
+    if (this._loading && this._opening) await this._opening.catch(() => {});
+    if (this._loading) return; // load failed: data is partial, never write it
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
@@ -88,6 +108,7 @@ export class Drafts {
   }
 
   _schedule() {
+    if (this._loading) { this._dirty = true; return; } // open() re-schedules after merging
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._timer = null;
@@ -97,6 +118,7 @@ export class Drafts {
   }
 
   _write() {
+    if (this._loading) return Promise.resolve();
     const snapshot = structuredClone(this._data); // taken now, saved in order
     const p = this._inflight.catch(() => {}).then(() => this._save(snapshot));
     this._inflight = p;

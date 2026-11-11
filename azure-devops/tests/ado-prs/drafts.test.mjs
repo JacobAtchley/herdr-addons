@@ -96,6 +96,50 @@ test("set racing with open's load is not lost", async () => {
   assert.equal(m.peek()["o/r/B"].g.body, "raced");
 });
 
+test("never saves partial data while load is pending", async () => {
+  const other = { body: "keep", target: { general: true }, updated: 5 };
+  const m = mem({ "o/r/9": { g: other } });
+  const saved = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const d = new Drafts({
+    load: async () => { await gate; return m.peek(); },
+    save: async (o) => { saved.push(structuredClone(o)); await m.save(o); },
+    now: () => 10,
+  });
+  const opening = d.open("o/r/1");
+  d.set("g", { general: true }, "raced");
+  const fl = d.flush(); // must wait, not write partial data
+  await new Promise((r) => setTimeout(r, 350)); // past the debounce
+  assert.equal(saved.length, 0);
+  release();
+  await opening;
+  await fl;
+  await d.flush();
+  assert.ok(saved.length >= 1);
+  for (const s of saved) assert.equal(s["o/r/9"].g.body, "keep");
+  const last = saved.at(-1);
+  assert.equal(last["o/r/1"].g.body, "raced");
+});
+
+test("overlapping open() calls are serialized; stale open cannot clobber", async () => {
+  const m = mem({ "o/r/B": { b: { body: "B", target: { thread: 1 }, updated: 5 } },
+                  "o/r/C": { c: { body: "C", target: { thread: 2 }, updated: 5 } } });
+  let releaseB;
+  const gateB = new Promise((r) => { releaseB = r; });
+  let calls = 0;
+  const d = new Drafts({ load: async () => { if (calls++ === 0) await gateB; return m.peek(); }, save: m.save, now: () => 10 });
+  const ob = d.open("o/r/B");
+  const oc = d.open("o/r/C");
+  releaseB();
+  await Promise.all([ob, oc]);
+  assert.equal(d.get("c").body, "C");
+  assert.equal(d.get("b"), null);
+  await d.flush();
+  assert.equal(m.peek()["o/r/B"].b.body, "B");
+  assert.equal(m.peek()["o/r/C"].c.body, "C");
+});
+
 test("onError is called when a debounced save rejects; flush rejects", async () => {
   const errs = [];
   const boom = new Error("disk");
