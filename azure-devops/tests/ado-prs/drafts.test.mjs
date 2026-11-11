@@ -66,3 +66,44 @@ test("saves are debounced", async () => {
   await d.flush();
   assert.equal(saves, 1);
 });
+
+test("open of another PR keeps the previous PR's pending edits", async () => {
+  const m = mem(null);
+  const d = new Drafts({ ...m, now: () => 1 });
+  await d.open("o/r/A");
+  d.set("g", { general: true }, "draft A");
+  await d.open("o/r/B");
+  assert.equal(m.peek()["o/r/A"].g.body, "draft A");
+  assert.equal(d.get("g"), null);
+  await d.open("o/r/A");
+  assert.equal(d.get("g").body, "draft A");
+  await d.flush();
+  assert.equal(m.peek()["o/r/A"].g.body, "draft A");
+});
+
+test("set racing with open's load is not lost", async () => {
+  const m = mem({ "o/r/B": { t: { body: "old", target: { thread: 1 }, updated: 1 } } });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const d = new Drafts({ load: async () => { await gate; return m.peek(); }, save: m.save, now: () => 2 });
+  const opening = d.open("o/r/B");
+  d.set("g", { general: true }, "raced");
+  release();
+  await opening;
+  assert.equal(d.get("g").body, "raced");
+  assert.equal(d.get("t").body, "old");
+  await d.flush();
+  assert.equal(m.peek()["o/r/B"].g.body, "raced");
+});
+
+test("onError is called when a debounced save rejects; flush rejects", async () => {
+  const errs = [];
+  const boom = new Error("disk");
+  const d = new Drafts({ load: async () => null, save: async () => { throw boom; }, now: () => 1, onError: (e) => errs.push(e) });
+  await d.open("o/r/1");
+  d.set("g", { general: true }, "a");
+  await new Promise((r) => setTimeout(r, 350));
+  assert.deepEqual(errs, [boom]);
+  d.set("g", { general: true }, "b");
+  await assert.rejects(d.flush(), /disk/);
+});

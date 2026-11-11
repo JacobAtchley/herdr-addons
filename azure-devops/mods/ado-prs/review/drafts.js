@@ -16,7 +16,8 @@ export function prKey(ref) {
 export class Drafts {
   static MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 
-  constructor({ load, save, now = Date.now }) {
+  constructor({ load, save, now = Date.now, onError }) {
+    this._onError = onError;
     this._load = load;
     this._save = save;
     this._now = now;
@@ -27,8 +28,20 @@ export class Drafts {
   }
 
   async open(pr) {
+    // Never drop the previous PR's pending edits: flush() snapshots them
+    // synchronously, so we can switch PR immediately and collect any set()
+    // that races with the awaited flush/load below.
+    const flushed = this.flush();
     this._pr = pr;
-    this._data = (await this._load()) ?? {};
+    const raced = (this._data = {});
+    try { await flushed; } catch (e) { this._onError?.(e); }
+    const loaded = (await this._load()) ?? {};
+    const mine = raced[pr];
+    this._data = loaded;
+    if (mine && Object.keys(mine).length) {
+      this._data[pr] = { ...(loaded[pr] ?? {}), ...mine };
+      this._schedule();
+    }
     const cutoff = this._now() - Drafts.MAX_AGE_MS;
     let pruned = false;
     for (const [p, map] of Object.entries(this._data)) {
@@ -78,13 +91,14 @@ export class Drafts {
     if (this._timer) clearTimeout(this._timer);
     this._timer = setTimeout(() => {
       this._timer = null;
-      this._write().catch(() => {});
+      this._write().catch((e) => this._onError?.(e));
     }, DEBOUNCE_MS);
     this._timer.unref?.();
   }
 
   _write() {
-    const p = this._inflight.catch(() => {}).then(() => this._save(this._data));
+    const snapshot = structuredClone(this._data); // taken now, saved in order
+    const p = this._inflight.catch(() => {}).then(() => this._save(snapshot));
     this._inflight = p;
     return p;
   }
