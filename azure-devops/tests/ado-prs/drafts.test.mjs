@@ -304,3 +304,43 @@ test("a set after a delete queued during a load wins", async () => {
   await opening;
   assert.equal(d.get("g").body, "new");
 });
+
+test("an unreadable file during a save never overwrites it; the save retries", async () => {
+  const m = mem({ "o/r/9": { g: { body: "keep", target: { general: true }, updated: 5 } } });
+  let unreadable = false;
+  let saves = 0;
+  const d = new Drafts({
+    load: async () => { if (unreadable) throw new Error("torn"); return m.load(); },
+    save: async (o) => { saves++; await m.save(o); },
+    now: () => 10,
+    onError: () => {},
+  });
+  await d.open("o/r/1");
+  unreadable = true;
+  d.set("g", { general: true }, "x");
+  await assert.rejects(d.flush(), /torn/);
+  assert.equal(saves, 0);
+  assert.equal(m.peek()["o/r/9"].g.body, "keep");
+  unreadable = false;
+  await d.flush(); // nothing new set: the failed PR is still pending
+  d.set("g", { general: true }, "x2");
+  await d.flush();
+  assert.equal(m.peek()["o/r/1"].g.body, "x2");
+  assert.equal(m.peek()["o/r/9"].g.body, "keep");
+});
+
+test("each merged save runs load and save inside `exclusive`", async () => {
+  const m = mem({});
+  const log = [];
+  const d = new Drafts({
+    load: async () => { log.push("load"); return m.load(); },
+    save: async (o) => { log.push("save"); await m.save(o); },
+    exclusive: async (fn) => { log.push("lock"); try { return await fn(); } finally { log.push("unlock"); } },
+    now: () => 10,
+  });
+  await d.open("o/r/1");
+  log.length = 0;
+  d.set("g", { general: true }, "x");
+  await d.flush();
+  assert.deepEqual(log, ["lock", "load", "save", "unlock"]);
+});
