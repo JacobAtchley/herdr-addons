@@ -404,7 +404,10 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     It parses the JSON after the line `@@ADO-STANDUP@@`.
   - `standup.py` uses the standard library only. It gets a bearer token once
     with `az account get-access-token --resource 499b84ac-…`, then calls REST
-    with `urllib`, 30s timeout.
+    with `urllib`, 30s timeout. A network failure (a DNS lookup that fails
+    for a moment, a dropped connection) is retried up to 3 attempts, waiting
+    1s then 2s; HTTP errors from ADO aren't retried. Tests:
+    `python3 -m unittest discover -s azure-devops/tests/ado-standup`.
   - It reads the team's members and area paths (`teamfieldvalues`) first. Then
     it fetches these in parallel:
     - teams

@@ -34,6 +34,10 @@ WI_DAYS = 90  # work item history (stale detection, 14-day throughput)
 BLOCK_TAGS = ["Blocked", "Impediment", "external-dependency"]  # --block-tags overrides
 PROD_ENV = re.compile(r"(^|[-_ ])(prod|production)($|[-_ ])", re.I)
 TIMEOUT = 30
+# A network failure (a DNS lookup that fails for a moment, a dropped connection)
+# is retried; HTTP errors are answers from ADO and aren't. Every call only reads.
+ATTEMPTS = 3
+RETRY_WAIT = 1.0  # seconds, doubled each retry
 
 
 def az_bin():
@@ -73,16 +77,25 @@ class Ado:
             url = self.base + url
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, method=method, headers=self.headers)
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                return json.loads(r.read() or b"null")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:300]
+        for attempt in range(ATTEMPTS):
             try:
-                detail = json.loads(detail).get("message", detail)
-            except Exception:
-                pass
-            raise RuntimeError(f"HTTP {e.code}: {detail}") from None
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                    return json.loads(r.read() or b"null")
+            except urllib.error.HTTPError as e:
+                self._http_error(e)
+            except urllib.error.URLError:
+                if attempt == ATTEMPTS - 1:
+                    raise
+                time.sleep(RETRY_WAIT * 2 ** attempt)
+
+    @staticmethod
+    def _http_error(e):
+        detail = e.read().decode(errors="replace")[:300]
+        try:
+            detail = json.loads(detail).get("message", detail)
+        except Exception:
+            pass
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
 
     def get(self, url):
         return self.call("GET", url)
