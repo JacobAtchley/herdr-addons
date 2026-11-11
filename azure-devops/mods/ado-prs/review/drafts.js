@@ -7,6 +7,16 @@
 
 const DEBOUNCE_MS = 300;
 
+// Node's timers, for tests and plain JS. The Herdr mod runtime has no
+// setTimeout (it throws), so the mod passes its own `timer`.
+const nodeTimer = {
+  after(ms, fn) {
+    const t = setTimeout(fn, ms);
+    t.unref?.();
+    return () => clearTimeout(t);
+  },
+};
+
 export function draftKey(t) {
   if (t.general) return "g";
   if (t.thread != null) return `t:${t.thread}`;
@@ -41,7 +51,9 @@ export class Drafts {
 
   // exclusive(fn): runs fn (one re-read + save) while holding a lock shared
   // with the other instances, so two saves can't interleave read and write.
-  constructor({ load, save, now = Date.now, onError, exclusive = (fn) => fn() }) {
+  // timer.after(ms, fn) runs fn once after ms and returns a cancel function.
+  constructor({ load, save, now = Date.now, onError, exclusive = (fn) => fn(), timer = nodeTimer }) {
+    this._after = timer.after;
     this._onError = onError;
     this._load = load;
     this._save = save;
@@ -169,7 +181,7 @@ export class Drafts {
     if (this._loading && this._opening) await this._opening.catch(() => {});
     if (this._unsafe) return; // last load failed: data is partial, never write it
     if (this._timer) {
-      clearTimeout(this._timer);
+      this._timer();
       this._timer = null;
       await this._write();
     }
@@ -180,12 +192,11 @@ export class Drafts {
   _schedule() {
     if (this._loading) { this._dirty = true; return; } // open() re-schedules after merging
     if (this._unsafe) return;
-    if (this._timer) clearTimeout(this._timer);
-    this._timer = setTimeout(() => {
+    if (this._timer) this._timer();
+    this._timer = this._after(DEBOUNCE_MS, () => {
       this._timer = null;
       this._write().catch((e) => this._onError?.(e));
-    }, DEBOUNCE_MS);
-    this._timer.unref?.();
+    });
   }
 
   // Snapshot the touched PR maps now; in order, re-read the file, merge them

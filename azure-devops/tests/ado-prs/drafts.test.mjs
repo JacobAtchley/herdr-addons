@@ -344,3 +344,28 @@ test("each merged save runs load and save inside `exclusive`", async () => {
   await d.flush();
   assert.deepEqual(log, ["lock", "load", "save", "unlock"]);
 });
+
+test("with an injected timer, Drafts never touches setTimeout (it throws in the Herdr runtime)", async () => {
+  const real = { set: globalThis.setTimeout, clear: globalThis.clearTimeout };
+  const boom = () => { throw new Error("`setTimeout` is not available in the shell"); };
+  const pending = [];
+  const timer = { after: (ms, fn) => { const t = { fn, cancelled: false }; pending.push(t); return () => { t.cancelled = true; }; } };
+  const fire = async () => { for (const t of pending.splice(0)) if (!t.cancelled) t.fn(); await new Promise((r) => real.set(r, 0)); };
+  const m = mem({});
+  const d = new Drafts({ ...m, timer, now: () => 10 });
+  globalThis.setTimeout = boom;
+  globalThis.clearTimeout = boom;
+  try {
+    await d.open("o/r/1");
+    d.set("g", { general: true }, "h");
+    d.set("g", { general: true }, "hi"); // reschedules: the first one is cancelled
+    await fire();
+    assert.equal(m.peek()["o/r/1"].g.body, "hi");
+    d.set("g", { general: true }, "hi!");
+    await d.flush(); // flush cancels the pending timer and saves now
+    assert.equal(m.peek()["o/r/1"].g.body, "hi!");
+  } finally {
+    globalThis.setTimeout = real.set;
+    globalThis.clearTimeout = real.clear;
+  }
+});

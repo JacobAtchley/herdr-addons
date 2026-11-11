@@ -110,6 +110,9 @@ export default class AdoPrs extends View {
     // The review view, when open: replaces the list.
     this.review = null;
     const want = _props?.review ?? props()?.review;
+    // props.review.returnTo (e.g. "Standup"): this copy was opened by another
+    // mod just for this PR, so the back arrow closes it and returns there.
+    this.returnTo = want?.returnTo ? String(want.returnTo) : null;
     if (want?.repoId && want?.id) this.openReview(want, cx);
     this.refresh(cx);
     cx.timer.every(REFRESH_MS, (cx) => this.refresh(cx));
@@ -137,7 +140,12 @@ export default class AdoPrs extends View {
         if (self.providerOrg !== self.org) { self.provider = createAdoProvider({ rest, org: self.org }); self.providerOrg = self.org; }
         return self.provider;
       },
-      back(cx) { self.review = null; cx.notify(); },
+      backLabel: this.returnTo ? `Back to ${this.returnTo}` : "Back to the list",
+      back(cx) {
+        if (self.returnTo && props()?.overlay) return self.dismiss();
+        self.review = null;
+        cx.notify();
+      },
       notify: (msg) => notify({ title: "Pull request", body: msg, level: "error" }),
       chrome: (t) => (props()?.overlay ? [this.iconButton(t, "rv-close", "mods/ado-prs/x.svg", "Close", () => this.dismiss())] : []),
     };

@@ -194,7 +194,12 @@ chip.
     40% opacity
   - the first 8 items, then "Show all N"
 - **PRs needing review**: oldest first. Each row has an age bar under it in
-  `#9085e9`, or `#fab219` once the PR is 5 or more days old.
+  `#9085e9`, or `#fab219` once the PR is 5 or more days old. Clicking a row
+  opens the PR in the `ado-prs` review view as a dialog on top of the
+  standup (props `{review: {project, repoId, id, returnTo: "Standup"}}`); its
+  back arrow ("Back to Standup") or Esc returns to the standup. The row's
+  external-link icon opens the PR in the browser. Stuck PRs under Impediments
+  do the same.
 - **Impediments**: grouped as Failing main builds, Stuck PRs, Blocking tags and
   Stale in progress (3d+). It shows 6 per group, and each row's lead bar shows
   severity: `#d03b3b` critical, `#ec835a` serious, `#fab219` warning.
@@ -440,6 +445,12 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     - `claude.folder`, where `~/` is allowed and the default is home
 
 ## Watch out
+
+- The mod runtime has no `setTimeout` (calling it throws "use
+  cx.timer.after"). Code that has a `cx` uses `cx.timer.after`/`every`; the
+  review's drafts store has none, so it waits on an `exec("sleep")` process.
+- A dialog can open another dialog (`openOverlay` from inside one): the new
+  one stacks on top, and closing it shows the first again.
 
 - A mod reads its own files through `mods/<name>/…` paths, and those names are
   hard-coded. If you rename a mod, fix its `svg()` paths, the `run`/`openOverlay`

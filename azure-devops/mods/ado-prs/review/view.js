@@ -28,7 +28,16 @@ const OVERVIEW = "overview";
 let draftsStore = null;
 let draftsError = () => {};
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The mod runtime has no setTimeout (it throws "use cx.timer.after"), and the
+// drafts store lives outside any view's cx, so it waits on a `sleep` process.
+const sleep = (ms) => exec("sleep", [String(ms / 1000)]).catch(() => {});
+const timer = {
+  after(ms, fn) {
+    let cancelled = false;
+    sleep(ms).then(() => { if (!cancelled) fn(); });
+    return () => { cancelled = true; };
+  },
+};
 const LOCK_TRIES = 40; // × 25 ms: a lock older than ~1 s is a crashed holder's
 const LOCK_WAIT_MS = 25;
 
@@ -88,6 +97,7 @@ function drafts() {
       }
     },
     onError: (e) => draftsError(e),
+    timer,
   });
   return draftsStore;
 }
@@ -96,7 +106,7 @@ const msg = (e) => String(e?.message ?? e);
 
 export class Review {
   /**
-   * @param {{org: string, provider: import("./model.js").Provider, back(cx): void, notify(msg: string): void, chrome?(t): any[]}} host
+   * @param {{org: string, provider: import("./model.js").Provider, back(cx): void, backLabel?: string, notify(msg: string): void, chrome?(t): any[]}} host
    * @param {{project: string, repoId: string, id: number}} ref
    */
   constructor(host, ref, cx) {
@@ -407,7 +417,7 @@ export class Review {
   header(t) {
     const pr = this.pr;
     const row = h_flex().flex_none().gap(10).items_center()
-      .child(iconButton(t, "rv-back", "back", "Back to the list", (_e, cx) => this.back(cx)))
+      .child(iconButton(t, "rv-back", "back", this.host.backLabel ?? "Back to the list", (_e, cx) => this.back(cx)))
       .child(div().flex_none().text_size(12.5).text_color(t.dim).child(`#${this.ref.id}`))
       .when(Boolean(pr?.isDraft), (el) => el.child(badge(t, "DRAFT", t.dim)))
       .when(Boolean(pr && pr.status !== "active"), (el) => el.child(badge(t, String(pr.status).toUpperCase(), t.muted)))
