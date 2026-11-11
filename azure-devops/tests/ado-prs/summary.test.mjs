@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, targetLabel, ago, displayName,
+  myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, targetLabel, ago, displayName, replyDrafts,
 } from "../../mods/ado-prs/review/summary.js";
 
 const R = (id, vote) => ({ id, name: id, vote, required: false, isGroup: false });
@@ -81,6 +81,22 @@ test("fileDrafts keeps file drafts only, sorted, flags files that left the PR", 
   assert.deepEqual(out.map((d) => d.key), ["a1", "a2", "b"]);
   assert.deepEqual(out.map((d) => d.gone), [false, false, true]);
   assert.equal(fileDrafts(drafts, null).some((d) => d.gone), false);
+});
+
+test("replyDrafts lists reply drafts not shown on the Overview (file threads, unknown threads)", () => {
+  const drafts = [
+    { key: "g", target: { general: true }, body: "x" },
+    { key: "t:1", target: { thread: 1 }, body: "on general" },
+    { key: "t:3", target: { thread: 3 }, body: "on file\nmore" },
+    { key: "t:9", target: { thread: 9 }, body: "gone" },
+    { key: "f", target: { file: "/a.cs", side: "right", line: 1 }, body: "f" },
+  ];
+  const threads = [{ id: 1, status: "active" }, { id: 3, status: "resolved", file: { path: "/a.cs", side: "right", startLine: 4, endLine: 4 } }];
+  assert.deepEqual(replyDrafts(drafts, threads), [
+    { key: "t:3", thread: 3, body: "on file\nmore", file: "/a.cs", known: true },
+    { key: "t:9", thread: 9, body: "gone", file: null, known: false },
+  ]);
+  assert.deepEqual(replyDrafts(drafts, null), []);
 });
 
 test("targetLabel", () => {

@@ -13,6 +13,8 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, theme, props, closeOverlay, run, notify, home, appHome } from "herdr";
 import { readFile } from "fs/promises";
 import { Review } from "./review/view.js";
+import { createAdoProvider } from "./review/providers/ado.js";
+import { rest } from "./review/azrest.js";
 
 // Settings from addons.json in the herdr-app folder (see the herdr-addons
 // README). Read on each use, so edits apply without reloading the mod.
@@ -130,6 +132,11 @@ export default class AdoPrs extends View {
     const self = this;
     return {
       get org() { return self.org; },
+      // The review view speaks only the neutral provider interface (model.js).
+      get provider() {
+        if (self.providerOrg !== self.org) { self.provider = createAdoProvider({ rest, org: self.org }); self.providerOrg = self.org; }
+        return self.provider;
+      },
       back(cx) { self.review = null; cx.notify(); },
       notify: (msg) => notify({ title: "Pull request", body: msg, level: "error" }),
       chrome: (t) => (props()?.overlay ? [this.iconButton(t, "rv-close", "mods/ado-prs/x.svg", "Close", () => this.dismiss())] : []),

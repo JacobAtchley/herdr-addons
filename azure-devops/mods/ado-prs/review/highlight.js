@@ -1,7 +1,7 @@
 // Syntax highlighting by shelling out to bat. Not unit-tested (needs herdr).
 // exec has no stdin, so the source goes through a temp file in the app cache.
 import { exec, appHome } from "herdr";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, writeFile, unlink } from "fs/promises";
 import { parseAnsi, fitLines } from "./ansi.js";
 import { splitLines } from "./diff.js";
 
@@ -51,17 +51,26 @@ async function ensureDir(dir) {
   dirReady = true;
 }
 
-/** → Span[][] for `text` as the language of `path`, or null (no bat / bat failed). */
-export async function highlightFile(path, text, dark) {
+/**
+ * → Span[][] for `text` as the language of `path`, or null (no bat / bat failed).
+ * Concurrent calls for the same key share one run (they would share the temp
+ * file, and the first to finish deletes it).
+ */
+export function highlightFile(path, text, dark) {
   const key = hash(path + "\0" + dark + "\0" + text);
-  if (memo.has(key)) return memo.get(key);
+  if (!memo.has(key)) memo.set(key, runBat(key, path, text, dark));
+  return memo.get(key);
+}
+
+async function runBat(key, path, text, dark) {
   const bat = await findBat();
   if (!bat) return null;
   let result = null;
+  let file = null;
   try {
     const dir = `${appHome()}/cache/ado-prs/hl`;
     await ensureDir(dir);
-    const file = `${dir}/${key}.src`;
+    file = `${dir}/${key}.src`;
     await writeFile(file, text);
     const r = await exec(bat, [
       "--color=always", "--style=plain", "--paging=never", "--tabs=4",
@@ -69,6 +78,7 @@ export async function highlightFile(path, text, dark) {
     ], { timeout: 15000 });
     if (r.code === 0) result = fitLines(parseAnsi(r.stdout), splitLines(text).length);
   } catch { /* leave null */ }
-  memo.set(key, result);
+  // The copy is private source: never leave it in the cache.
+  if (file) await unlink(file).catch(() => {});
   return result;
 }

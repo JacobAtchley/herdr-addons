@@ -84,6 +84,23 @@ export function fileDrafts(drafts, files) {
     .sort((a, b) => a.target.file.localeCompare(b.target.file) || a.target.line - b.target.line);
 }
 
+/**
+ * Reply drafts the Overview doesn't show inside a thread: replies on file
+ * threads (`file` = its path) and on threads not in the current list
+ * (`known: false`). Empty while threads are still loading.
+ */
+export function replyDrafts(drafts, threads) {
+  if (!threads) return [];
+  const byId = new Map(threads.map((th) => [th.id, th]));
+  return (drafts ?? [])
+    .filter((d) => d.target?.thread != null)
+    .map((d) => {
+      const th = byId.get(d.target.thread);
+      return { key: d.key, thread: d.target.thread, body: d.body, file: th?.file?.path ?? null, known: !!th };
+    })
+    .filter((d) => !d.known || d.file != null);
+}
+
 /** "file.cs:12" / "file.cs:12-14 (old)" for a file draft target. */
 export function targetLabel(t) {
   const lines = t.endLine != null && t.endLine !== t.line ? `${t.line}-${t.endLine}` : `${t.line}`;

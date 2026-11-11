@@ -238,7 +238,7 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
   - Status strip: reviewer chips (vote, "required") and gate chips. A build
     gate opens that run in `ado-pipelines`, and a linked work item opens in
     `ado-workitems`, both in a split pane beside the review. Other gates show
-    their reason in a tooltip. Gates refresh every 30 s while one is running.
+    their reason in a tooltip. The PR refreshes every 30 s while a build or check gate is running (policy gates waiting on votes don't trigger it).
   - Left list: Overview, then the changed files with a change letter and a
     thread count. The Overview has the description, linked work items, general
     threads with a new-comment box, and a summary of file threads.

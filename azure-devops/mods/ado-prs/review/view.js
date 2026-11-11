@@ -10,11 +10,9 @@ import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, TextView, Popover } from "gpui-base";
 import { exec, run, appHome } from "herdr";
 import { readFile, writeFile, mkdir } from "fs/promises";
-import { createAdoProvider } from "./providers/ado.js";
-import { rest } from "./azrest.js";
 import { Drafts, draftKey, prKey } from "./drafts.js";
 import {
-  myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, targetLabel, ago, displayName,
+  myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, replyDrafts, targetLabel, ago, displayName,
 } from "./summary.js";
 import { ICON, button, iconButton, textAction, badge, count, section, note, centered } from "./ui/parts.js";
 import { FilePages } from "./filepage.js";
@@ -56,13 +54,13 @@ const msg = (e) => String(e?.message ?? e);
 
 export class Review {
   /**
-   * @param {{org: string, back(cx): void, notify(msg: string): void, chrome?(t): any[]}} host
+   * @param {{org: string, provider: import("./model.js").Provider, back(cx): void, notify(msg: string): void, chrome?(t): any[]}} host
    * @param {{project: string, repoId: string, id: number}} ref
    */
   constructor(host, ref, cx) {
     this.host = host;
     this.ref = { org: host.org, project: ref.project, repoId: ref.repoId, id: Number(ref.id) };
-    this.provider = createAdoProvider({ rest, org: host.org });
+    this.provider = host.provider;
     this.drafts = drafts();
     draftsError = (e) => host.notify(`Couldn't save comment drafts: ${msg(e)}`);
     this.pk = prKey(this.ref); // drafts of this view always go to this PR
@@ -99,6 +97,15 @@ export class Review {
     this.themeCheck?.cancel();
     this.themeCheck = null;
     this.drafts.flush().catch((e) => draftsError(e));
+    // Text is already in the drafts store; free the native textarea states.
+    for (const key of [...this.boxes.keys()]) this.dropBox(key);
+  }
+
+  dropBox(key) {
+    const box = this.boxes.get(key);
+    if (!box) return;
+    this.boxes.delete(key);
+    try { box.state.release(); } catch { /* already released */ }
   }
 
   back(cx) {
@@ -264,6 +271,12 @@ export class Review {
     return box;
   }
 
+  discardDraft(cx, key) {
+    this.drafts.delete(key, { pr: this.pk });
+    this.dropBox(key);
+    cx.notify();
+  }
+
   /**
    * After `body` was posted from box `key`: drop the draft and empty the box,
    * but only while they still hold exactly what was posted (text typed during
@@ -325,9 +338,26 @@ export class Review {
   }
 
   go(cx, page) {
+    // A file outside the shown range (e.g. a thread's file under "Since last
+    // look"): switch to All changes; apply() then shows it, or falls back to
+    // the Overview when the PR doesn't change it at all.
+    if (page !== OVERVIEW && this.files && !this.files.some((f) => f.path === page)) {
+      if (this.rangeMode !== "since") {
+        this.host.notify(`${page} isn't changed in this pull request`);
+        return;
+      }
+      this.page = page;
+      this.setRangeMode(cx, "all");
+      return;
+    }
     this.page = page;
     this.fp.ensure(cx);
     cx.notify();
+  }
+
+  // A thread with an unsent reply always shows expanded so the draft is visible.
+  threadOpen(th) {
+    return th.status !== "resolved" || this.expanded.has(th.id) || this.drafts.get(draftKey({ thread: th.id }), this.pk) != null;
   }
 
   // ---- header
@@ -475,7 +505,7 @@ export class Review {
 
   thread(t, th) {
     const resolved = th.status === "resolved";
-    const open = !resolved || this.expanded.has(th.id);
+    const open = this.threadOpen(th);
     const first = th.comments[0];
     const key = draftKey({ thread: th.id });
     const box = this.boxes.get(key);
@@ -535,6 +565,7 @@ export class Review {
     general.sort((a, b) => (a.status === "resolved") - (b.status === "resolved"));
     const sum = threadSummary(this.threads);
     const fds = fileDrafts(this.drafts.list(this.pk), this.files);
+    const rds = replyDrafts(this.drafts.list(this.pk), this.threads);
     const filesWithThreads = [...sum.byFile.entries()];
     const g = this.boxes.get("g");
     const posting = this.busy.has("post:g");
@@ -561,6 +592,15 @@ export class Review {
           .child(div().flex_none().text_size(11.5).text_color(d.gone ? t.blocked : t.accent).child(targetLabel(d.target)))
           .when(d.gone, (el) => el.child(badge(t, "FILE NOT IN PR", t.blocked)))
           .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(d.body.split("\n")[0]))))))
+      .when(rds.length > 0, (el) => el.child(v_flex().gap(4)
+        .child(section(t, "Unsent replies", rds.length))
+        .child(note(t, "Replies not posted yet. Replies on file threads are under the thread on the file's page."))
+        .children(rds.map((d, i) => h_flex().id(`rv-rd-${i}`).px(8).py(4).gap(8).items_center().rounded(6)
+          .when(Boolean(d.file), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.go(cx, d.file)))
+          .child(div().flex_none().text_size(11.5).text_color(d.known ? t.accent : t.blocked).child(d.file ?? `Thread #${d.thread}`))
+          .when(!d.known, (el) => el.child(badge(t, "THREAD NOT FOUND", t.blocked)))
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(d.body.split("\n")[0]))
+          .when(!d.known, (el) => el.child(button(t, `rv-rd-x-${i}`, "Discard", (_e, cx) => this.discardDraft(cx, d.key))))))))
       .when(filesWithThreads.length > 0, (el) => el.child(v_flex().gap(4).child(section(t, "Threads on files", filesWithThreads.length))
         .children(filesWithThreads.map(([path, c], i) => h_flex().id(`rv-ft-${i}`).px(8).py(4).gap(8).items_center().rounded(6)
           .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.go(cx, path))

@@ -178,7 +178,7 @@ export class FilePages {
       if (oldKey !== key && !rv.busy.has(`post:${oldKey}`)) {
         rv.drafts.delete(oldKey, { pr: rv.pk, ifBody: text || undefined });
         this.open.delete(oldKey);
-        rv.boxes.delete(oldKey);
+        rv.dropBox(oldKey);
       }
     } else {
       this.anchor = { path, side: hit.side, line: hit.line };
@@ -213,7 +213,7 @@ export class FilePages {
   discard(cx, key) {
     this.rv.drafts.delete(key, { pr: this.rv.pk });
     this.open.delete(key);
-    this.rv.boxes.delete(key);
+    this.rv.dropBox(key);
     cx.notify();
   }
 
@@ -230,7 +230,7 @@ export class FilePages {
       .when(Boolean(tip), (el) => el.tooltip(tip))
       .child(label);
     const group = (...kids) => h_flex().flex_none().rounded(6).border(1).border_color(t.border).overflow_hidden().children(kids);
-    const url = rv.pr?.url ? `${rv.pr.url}?_a=files&path=${encodeURIComponent(path)}` : null;
+    const url = rv.pr ? rv.provider.fileUrl(rv.pr, path) : null;
     return v_flex().flex_none().px(16).py(8).gap(6).border_b(1).border_color(t.border)
       .child(h_flex().gap(8).items_center()
         .when(Boolean(f), (el) => el.child(badge(t, f.change.toUpperCase(), t[changeLook(f.change).color])))
@@ -256,9 +256,11 @@ export class FilePages {
     this.wantDark = isDarkTheme(t);
     const st = rv.range ? this.cache.get(this.stateKey(path, rv.range)) : null;
     let body;
-    const url = rv.pr?.url ? `${rv.pr.url}?_a=files&path=${encodeURIComponent(path)}` : null;
+    const url = rv.pr ? rv.provider.fileUrl(rv.pr, path) : null;
     const browserBtn = url ? button(t, "fp-browse", "Open in browser", () => rv.browse(url)) : null;
-    if (!st || st.loading) body = centered(note(t, "Loading diff…"));
+    const inRange = !rv.files || rv.files.some((f) => f.path === path);
+    if (!st && !inRange) body = centered(note(t, "Not changed in this range"));
+    else if (!st || st.loading) body = centered(note(t, "Loading diff…"));
     else if (st.error) body = centered(note(t, `Couldn't load this file: ${st.error}`, t.blocked));
     else if (st.binary) body = centered(note(t, "Binary file — open in browser"), browserBtn);
     else if (st.large) body = centered(note(t, "Too large to show — open in browser"), browserBtn);
@@ -449,7 +451,7 @@ export class FilePages {
   threadItems(t, th, side, top, push) {
     const rv = this.rv;
     const resolved = th.status === "resolved";
-    const open = !resolved || rv.expanded.has(th.id);
+    const open = rv.threadOpen(th);
     const accent = resolved ? t.border : t.accent;
     const first = th.comments[0];
     const statusColor = resolved ? t.ansi2 : th.status === "pending" ? t.muted : t.working;

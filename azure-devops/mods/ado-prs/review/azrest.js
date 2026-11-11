@@ -17,8 +17,9 @@ export async function az(args) {
       last = e;
       continue;
     }
-    if (r.code !== 0 && r.code != null) {
-      const msg = (r.stderr || "az failed").trim().split("\n").filter((l) => !/^WARNING/.test(l)).pop() || "az failed";
+    // code null = killed by a signal (e.g. a timeout): a failure, never success.
+    if (r.code !== 0) {
+      const msg = (r.stderr || (r.code == null ? "az was interrupted" : "az failed")).trim().split("\n").filter((l) => !/^WARNING/.test(l)).pop() || "az failed";
       // ADO errors arrive as `ERROR: Not Found({..."message":"..."})`.
       const m = msg.match(/"message":"((?:[^"\\]|\\.)*)"/);
       throw new Error(m ? JSON.parse(`"${m[1]}"`) : msg);
