@@ -228,7 +228,7 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
   PR. "Pending" means not a draft and nobody has voted.
 - **PR review view.** Opens in the same dialog or pane, with a back arrow to the
   list. It can also be opened with props `{review: {project, repoId, id}}`, or
-  by looking up an id.
+  by typing an id into the PR id box in the list header.
   - Header: `#id`, title, repo, `source → target`, author and age, a
     Publish / Mark as draft toggle, and the vote buttons: Wait for author,
     Reject, Approve (Approve / Approve with suggestions) and Reset. Votes are
@@ -249,8 +249,10 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     under the add/delete tints. Without `bat` the toolbar says "Install bat
     for syntax highlighting (brew install bat)" and diffs are plain text.
   - Toggles: Unified / Split, and All changes / Since last look (disabled when
-    there is no earlier look). Both are remembered per mod copy, so the dialog
-    and a split pane don't share them.
+    there is no earlier look). Unified / Split is remembered per mod copy.
+    "Since last look" compares against the version you saw on your previous
+    visit, kept per mod copy, so a dialog and a split pane track it separately.
+    The view always opens on All changes.
   - Unsent comments are saved to `~/.config/herdr-app/cache/ado-prs/drafts.json`
     and deleted after 7 days. They survive going back, closing and restarts.
     A draft whose line is gone shows as an unplaced draft.
