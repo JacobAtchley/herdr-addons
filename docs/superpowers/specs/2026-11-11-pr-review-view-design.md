@@ -79,7 +79,8 @@ The diff can't use Herdr's `Editor` (it is a whole-file editor; diff rows need i
 - Theme follows Herdr's appearance: `Catppuccin Mocha` in dark, `Catppuccin Latte` in light (settings.json theme is `{light: catppuccin-latte, dark: catppuccin}`).
 - Parse ANSI SGR into spans per line — reuse the parser in `ado-pipelines/loglines.js` (copy it; mods don't share modules). Cache highlighted lines by commit sha + path.
 - Diff add/delete line backgrounds (and word-level change backgrounds, if the builder adds them) are drawn behind the syntax colors.
-- Fallback: if `bat` is missing (public repo users) or the file is binary/too large, show plain text; README notes `brew install bat` for highlighting.
+- Fallback: if `bat` is missing or the file is binary/too large, show plain text. When bat is missing, the file toolbar shows a one-line hint ("Install bat for syntax highlighting").
+- **Docs deliverable (user request):** add `bat` to the README's `## Requirements` section (needed for syntax highlighting in the ado-prs review view; `brew install bat`), and mention it in `azure-devops/RECIPE.md` alongside the review view's description.
 
 ## Provider boundary
 
