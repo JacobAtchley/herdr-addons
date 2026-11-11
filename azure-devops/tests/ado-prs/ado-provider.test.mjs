@@ -170,9 +170,24 @@ test("rename fetches old side from original path", async () => {
   assert.equal(c.binary, false);
   const item = calls.find((c) => c.url.includes("/items?")).url;
   assert.ok(item.startsWith(`https://dev.azure.com/contoso-demo/Billing/_apis/git/repositories/${ref.repoId}/items?`));
-  for (const q of ["versionDescriptor.versionType=commit", "includeContent=true", "includeContentMetadata=true", "api-version=7.1"]) {
+  for (const q of ["versionDescriptor.versionType=commit", "includeContent=true", "includeContentMetadata=true", "$format=json"]) {
     assert.ok(item.includes(q), q);
   }
+  assert.ok(item.endsWith("api-version=7.1"));
+});
+
+test("getFileContents strips one leading BOM from each side", async () => {
+  const { rest } = fakeRest([[(m, u) => u.includes("/items?"), (m, u) => ({
+    commitId: "x", path: "/a.cs", content: u.includes(sourceSha) ? "﻿line1\n" : "line1\n",
+    contentMetadata: { encoding: 65001, contentType: "text/plain", extension: "cs", fileName: "a.cs" } })]]);
+  const p = createAdoProvider({ rest, org: "contoso-demo" });
+  const c = await p.getFileContents(ref, { path: "/a.cs", change: "edit" }, { from: null, to: 2 });
+  assert.equal(c.new, "line1\n");
+  assert.equal(c.old, c.new);
+  assert.equal(c.binary, false, "absent isBinary = text");
+  const { rest: rest2 } = fakeRest([[(m, u) => u.includes("/items?"), () => ({ content: "﻿﻿x", contentMetadata: {} })]]);
+  const c2 = await createAdoProvider({ rest: rest2, org: "o" }).getFileContents(ref, { path: "/a", change: "add" }, { from: null, to: 2 });
+  assert.equal(c2.new, "﻿x", "only one BOM stripped");
 });
 
 test("getFileContents: since-last-look uses from's source commit; add/delete skip a side; binary", async () => {
@@ -222,6 +237,7 @@ test("me() is cached", async () => {
   await p.me();
   assert.equal(calls.length, 1);
   assert.ok(calls[0].url.startsWith("https://dev.azure.com/contoso-demo/_apis/connectionData"));
+  assert.ok(calls[0].url.endsWith("api-version=7.1-preview.1"));
 });
 
 test("getPullRequest combines PR, iterations, gates, statuses, work items", async () => {
@@ -240,8 +256,26 @@ test("getPullRequest combines PR, iterations, gates, statuses, work items", asyn
   assert.ok(ev.includes(`artifactId=${encodeURIComponent(`vstfs:///CodeReview/CodeReviewId/${pr.repository.project.id}/482`)}`));
   const titles = calls.find((c) => c.url.includes("/_apis/wit/workitems?")).url;
   assert.ok(titles.includes("ids=1204%2C1207") || titles.includes("ids=1204,1207"));
-  assert.ok(calls.every((c) => c.method === "get" && c.url.includes("api-version=7.1")));
+  assert.ok(calls.every((c) => c.method === "get"));
+  // Policy evaluations and statuses need the preview version; the rest use plain 7.1.
+  const version = (u) => u.match(/api-version=([^&]+)$/)?.[1];
+  for (const c of calls) {
+    const preview = c.url.includes("/policy/evaluations") || c.url.includes("/statuses");
+    assert.equal(version(c.url), preview ? "7.1-preview.1" : "7.1", c.url);
+  }
+  assert.equal(m.gatesError, undefined);
 });
+
+for (const failing of ["/policy/evaluations", "/statuses"]) {
+  test(`getPullRequest survives a failing ${failing} call`, async () => {
+    const { rest } = fakeRest([[(m, u) => u.includes(failing), () => { throw new Error("VssInvalidPreviewVersionException"); }]]);
+    const m = await createAdoProvider({ rest, org: "contoso-demo" }).getPullRequest(ref);
+    assert.deepEqual(m.gates, []);
+    assert.equal(m.gatesError, "VssInvalidPreviewVersionException");
+    assert.equal(m.title, pr.title);
+    assert.equal(m.workItems.length, 2);
+  });
+}
 
 test("getPullRequest survives a failing work item title lookup", async () => {
   const { rest } = fakeRest([[(m, u) => u.includes("/_apis/wit/workitems?"), () => { throw new Error("TF401232"); }]]);

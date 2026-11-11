@@ -2,7 +2,9 @@
 // model in ../model.js. Pure: `rest(method, url, body?)` is injected.
 import { VOTES } from "../model.js";
 
-const API = "api-version=7.1";
+const API = "7.1";
+// Endpoints that reject plain 7.1 (VssInvalidPreviewVersionException).
+const PREVIEW = "7.1-preview.1";
 const enc = encodeURIComponent;
 const stripRef = (r) => (r ?? "").replace(/^refs\/heads\//, "");
 
@@ -177,14 +179,14 @@ export function createAdoProvider({ rest, org }) {
   const projectBase = (ref) => `${root}/${enc(ref.project)}/_apis`;
   const repoBase = (ref) => `${projectBase(ref)}/git/repositories/${enc(ref.repoId)}`;
   const prBase = (ref) => `${repoBase(ref)}/pullRequests/${ref.id}`;
-  const q = (url, params = "") => `${url}?${params ? `${params}&` : ""}${API}`;
+  const q = (url, params = "", version = API) => `${url}?${params ? `${params}&` : ""}api-version=${version}`;
 
   let meP = null;
   const iterCache = new Map();
 
   function me() {
     if (!meP) {
-      meP = rest("get", q(`${root}/_apis/connectionData`)).then((r) => ({
+      meP = rest("get", q(`${root}/_apis/connectionData`, "", PREVIEW)).then((r) => ({
         id: r.authenticatedUser.id, name: r.authenticatedUser.providerDisplayName,
       }));
       meP.catch(() => { meP = null; });
@@ -222,15 +224,17 @@ export function createAdoProvider({ rest, org }) {
   async function getPullRequest(ref) {
     const prP = rest("get", q(prBase(ref)));
     const evalP = prP.then((pr) => rest("get", q(`${projectBase(ref)}/policy/evaluations`,
-      `artifactId=${enc(`vstfs:///CodeReview/CodeReviewId/${pr.repository.project.id}/${ref.id}`)}`)));
-    const [pr, iters, evals, statuses, wis] = await Promise.all([
-      prP,
-      iterations(ref, [], true),
-      evalP,
-      rest("get", q(`${prBase(ref)}/statuses`)),
-      workItems(ref),
-    ]);
-    return mapPullRequest(pr, iters, evals?.value ?? [], statuses?.value ?? [], wis);
+      `artifactId=${enc(`vstfs:///CodeReview/CodeReviewId/${pr.repository.project.id}/${ref.id}`)}`, PREVIEW)));
+    // Gates are informational: a failure here must not fail the PR load.
+    const gatesP = Promise.all([evalP, rest("get", q(`${prBase(ref)}/statuses`, "", PREVIEW))])
+      .then(([e, s]) => ({ evals: e?.value ?? [], statuses: s?.value ?? [] }))
+      .catch((err) => ({ error: err?.message ?? String(err) }));
+    const [pr, iters, gates, wis] = await Promise.all([prP, iterations(ref, [], true), gatesP, workItems(ref)]);
+    if (gates.error) {
+      const m = mapPullRequest(pr, iters, [], [], wis);
+      return { ...m, gates: [], gatesError: gates.error };
+    }
+    return mapPullRequest(pr, iters, gates.evals, gates.statuses, wis);
   }
 
   async function listFiles(ref, range) {
@@ -250,8 +254,10 @@ export function createAdoProvider({ rest, org }) {
 
   async function item(ref, path, sha) {
     const r = await rest("get", q(`${repoBase(ref)}/items`,
-      `path=${enc(path)}&versionDescriptor.version=${enc(sha)}&versionDescriptor.versionType=commit&includeContent=true&includeContentMetadata=true`));
-    return { content: r?.content ?? "", binary: !!r?.contentMetadata?.isBinary };
+      `path=${enc(path)}&versionDescriptor.version=${enc(sha)}&versionDescriptor.versionType=commit&includeContent=true&includeContentMetadata=true&$format=json`));
+    // Without $format=json ADO returns raw text. isBinary is absent for text files.
+    // Strip one leading BOM so a BOM-only difference doesn't mark line 1 changed.
+    return { content: (r?.content ?? "").replace(/^﻿/, ""), binary: !!r?.contentMetadata?.isBinary };
   }
 
   async function getFileContents(ref, file, range) {
