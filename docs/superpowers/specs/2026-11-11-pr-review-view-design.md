@@ -20,13 +20,13 @@ The screen must not be tied to Azure DevOps. ADO is the first backend; GitHub sh
 7. Diff style: unified and side-by-side, toggle, last choice remembered.
 8. Diff range: full diff against target, or only changes since the user's last look (iteration compare), toggle.
 9. Clicking a build gate opens that run in `ado-pipelines`.
+10. **Syntax highlighting in diffs is required** (user: "a must"), in both unified and side-by-side, layered under the add/delete backgrounds.
 
 ## Non-goals
 
 - GitHub backend (only the seam for it).
 - Creating, completing (merging), or abandoning PRs; editing title/description; adding reviewers.
 - Editing files or suggesting code changes.
-- Syntax highlighting (nice-to-have, builder may add if cheap).
 - Offline mode.
 
 ## Anti-goals (would make it a failure even if it works)
@@ -70,6 +70,16 @@ The screen must not be tied to Azure DevOps. ADO is the first backend; GitHub sh
 - **Gates**: build gates → `ado-pipelines` with props `{project, build}`, opened as a **split pane** beside the review (`run("pane.split", {direction:"right", mod:"ado-pipelines", props})`) so the review dialog and its state stay put (user's choice; stacked dialogs may come later). Non-build gates → show their reason (policy name + status) in a tooltip or small popover.
 - **Work items** linked on the Overview open the same way: split pane with `ado-workitems` props `{detail:id}`.
 - **Unsent comments** (new-thread drafts and reply drafts) are saved to disk per PR, keyed by file + side + line (or thread id for replies), e.g. `~/.config/herdr-app/cache/ado-prs/drafts.json`. They survive going back to the list, closing the dialog, and restarts. Cleared when posted; drafts older than 7 days are deleted on load (user's choice). If a draft's line no longer exists after new pushes, show it in the Overview as "unplaced draft" rather than dropping it (my call).
+
+## Syntax highlighting
+
+The diff can't use Herdr's `Editor` (it is a whole-file editor; diff rows need interleaved threads), so highlighting is done outside and rendered as colored spans per row:
+
+- Highlight each **whole** file version (old and new) once, not per hunk, so multi-line strings/comments are colored correctly. Run `bat --color=always --style=plain --paging=never --file-name=<path> --theme=<t>` via `exec` with the content on stdin (bat 0.26 is installed at /opt/homebrew/bin/bat and ships Catppuccin themes; covers C#, TS/TSX, YAML, SQL, JSON etc.).
+- Theme follows Herdr's appearance: `Catppuccin Mocha` in dark, `Catppuccin Latte` in light (settings.json theme is `{light: catppuccin-latte, dark: catppuccin}`).
+- Parse ANSI SGR into spans per line — reuse the parser in `ado-pipelines/loglines.js` (copy it; mods don't share modules). Cache highlighted lines by commit sha + path.
+- Diff add/delete line backgrounds (and word-level change backgrounds, if the builder adds them) are drawn behind the syntax colors.
+- Fallback: if `bat` is missing (public repo users) or the file is binary/too large, show plain text; README notes `brew install bat` for highlighting.
 
 ## Provider boundary
 
@@ -150,4 +160,5 @@ The diff itself is computed locally from the two file versions (ADO has no text-
 - Non-build gates show their reason on click; no navigation.
 - Resolved threads collapsed by default.
 - Unplaced drafts (line gone after a push) surface on Overview.
-- Syntax highlighting, GitHub backend, merging/abandoning are out of scope.
+- Highlighting via `bat` + ANSI parsing, Catppuccin theme matching Herdr's light/dark.
+- GitHub backend, merging/abandoning are out of scope.
