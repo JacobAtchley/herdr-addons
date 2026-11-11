@@ -14,7 +14,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, theme, props, closeOverlay, run, notify, appHome } from "herdr";
+import { exec, theme, props, closeOverlay, openOverlay, run, notify, appHome } from "herdr";
 import { readFile } from "fs/promises";
 
 // Settings from addons.json in the herdr-app folder (see the herdr-addons
@@ -143,6 +143,16 @@ export default class Standup extends View {
     if (o) closeOverlay(o);
   }
 
+  // Open a PR in the ado-prs review view (votes, comments, diffs) as a dialog
+  // on top of this one; its back arrow and Esc return here.
+  reviewPr(pr) {
+    if (!pr?.repoId || !this.data?.project) return this.browse(pr?.url);
+    openOverlay({
+      mod: "ado-prs", kind: "dialog", width: 0.94, height: 0.92,
+      props: { review: { project: this.data.project, repoId: pr.repoId, id: pr.id, returnTo: "Standup" } },
+    });
+  }
+
   browse(url) {
     if (url) exec("open", [url]).catch((e) => notify({ title: "Couldn't open", body: String(e?.message ?? e), level: "error" }));
   }
@@ -192,7 +202,7 @@ export default class Standup extends View {
       const rej = pr.reviewers.find((r) => r.vote === -10), wait = pr.reviewers.find((r) => r.vote === -5);
       const why = rej ? `rejected by ${first(rej.name)}` : wait ? `waiting for author (${first(wait.name)})`
         : !votesOf(pr).some((r) => r.vote !== 0) && ageDays(pr.created) >= PR_STUCK_DAYS ? `open ${Math.floor(ageDays(pr.created))}d, no votes` : null;
-      if (why) imp.push({ kind: "pr", key: `p-${pr.id}`, title: pr.title, sub: `!${pr.id} · ${pr.repo} · ${pr.author?.name}`, why, url: pr.url, sev: rej ? S.critical : S.warning, at: pr.created });
+      if (why) imp.push({ kind: "pr", key: `p-${pr.id}`, title: pr.title, sub: `!${pr.id} · ${pr.repo} · ${pr.author?.name}`, why, url: pr.url, pr, sev: rej ? S.critical : S.warning, at: pr.created });
     }
     for (const b of d.builds?.latestMain ?? []) {
       if (b.result !== "failed" && b.result !== "partiallySucceeded") continue;
@@ -300,16 +310,19 @@ export default class Standup extends View {
   }
 
   // A clickable list row: colored lead bar, title, sub line, right text.
-  row(t, id, { title, sub, right, rightColor, lead, url, extra = null, onClick = null }) {
+  // With onClick, `url` is also offered as an open-in-browser icon.
+  row(t, id, { title, sub, right, rightColor, lead, url, extra = null, onClick = null, tip = null }) {
     return v_flex().id(id).px(8).py(5).gap(1).rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover))
+      .when(Boolean(tip), (el) => el.tooltip(tip))
       .on_click(onClick ?? (() => this.browse(url)))
       .child(h_flex().gap(8).items_center()
         .child(div().flex_none().w(3).h(26).rounded(2).bg(lead ?? t.border))
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_size(12.5).child(title ?? ""))
           .child(div().truncate().text_size(11).text_color(t.dim).child(sub ?? "")))
-        .when(Boolean(right), (el) => el.child(div().flex_none().text_size(11.5).text_color(rightColor ?? t.muted).child(right))))
+        .when(Boolean(right), (el) => el.child(div().flex_none().text_size(11.5).text_color(rightColor ?? t.muted).child(right)))
+        .when(Boolean(onClick && url), (el) => el.child(this.iconButton(t, `${id}-web`, "mods/ado-standup/external.svg", "Open in browser", () => this.browse(url)))))
       .when(Boolean(extra), (el) => el.child(extra));
   }
 
@@ -384,6 +397,7 @@ export default class Standup extends View {
           title: pr.title, sub: `!${pr.id} · ${pr.repo} · ${pr.author?.name ?? ""}${pr.open ? ` · ${pr.open} open comment${pr.open > 1 ? "s" : ""}` : ""}${vote(pr) ? ` · ${vote(pr)}` : ""}`,
           right: ago(pr.created), rightColor: age >= PR_STUCK_DAYS ? S.warning : t.muted,
           lead: pr.reviewers.some((r) => r.vote === -10) ? S.critical : pr.reviewers.some((r) => r.vote === -5) ? S.warning : C.violet, url: pr.url,
+          onClick: () => this.reviewPr(pr), tip: "Review in Herdr",
           extra: h_flex().pl(11).h(4).child(div().id(`pa-${pr.id}`).h_full().rounded_r(4).bg(age >= PR_STUCK_DAYS ? S.warning : C.violet).opacity(0.7)
             .w(`${Math.max(2, (100 * age) / max)}%`).tooltip(`open ${Math.floor(age)}d ${Math.floor((age % 1) * 24)}h`)),
         });
@@ -416,7 +430,8 @@ export default class Standup extends View {
         const shown = this.open[key] ? xs : xs.slice(0, 6);
         return v_flex()
           .child(div().pt(4).pb(2).text_size(11).font_semibold().text_color(t.dim).child(`${LABEL[k].toUpperCase()}  ${xs.length}`))
-          .children(shown.map((x) => this.row(t, `im-${x.key}`, { title: x.title, sub: x.sub, right: x.why, rightColor: t.muted, lead: x.sev, url: x.url })))
+          .children(shown.map((x) => this.row(t, `im-${x.key}`, { title: x.title, sub: x.sub, right: x.why, rightColor: t.muted, lead: x.sev, url: x.url,
+            ...(x.pr ? { onClick: () => this.reviewPr(x.pr), tip: "Review in Herdr" } : {}) })))
           .when(xs.length > 6, (el) => el.child(this.more(t, key, xs.length)));
       })) : this.empty(t, "No impediments. Nice."));
   }
