@@ -240,7 +240,7 @@ const PR_QUERY = "{id:pullRequestId,title:title,status:status,draft:isDraft,sour
 // ---- the view
 
 export class Detail {
-  // host: { org, back(cx), refine(item), open(item), updated(item), notify }
+  // host: { org, back(cx), backLabel?, refine(item), open(item), updated(item), notify }
   constructor(host, id, cx) {
     this.host = host;
     this.id = id;
@@ -562,7 +562,7 @@ export class Detail {
     const s = this.wi ? this.summary() : null;
     const tc = typeColor(t, this.type);
     const e = this.edit;
-    const back = this.icon(t, "d-back", "back", "Back to the list", (_ev, cx) => this.leave(cx, (cx) => this.host.back(cx)));
+    const back = this.icon(t, "d-back", "back", this.host.backLabel ?? "Back to the list", (_ev, cx) => this.leave(cx, (cx) => this.host.back(cx)));
     let row = h_flex().flex_none().px(16).py(10).gap(10).items_center().border_b(1).border_color(t.border)
       .child(back)
       .child(div().flex_none().text_size(12.5).text_color(t.dim).child(`#${this.id}`))

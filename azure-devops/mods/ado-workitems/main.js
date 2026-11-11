@@ -83,6 +83,10 @@ export default class AdoWorkItems extends View {
     // The details view, when open: replaces the list. props.detail opens one.
     this.detail = null;
     const want = Number(_props?.detail ?? props()?.detail);
+    // props.returnTo (e.g. "Pull request"): opened by another mod just for this
+    // item, so the details' back arrow closes the dialog and returns there.
+    const rt = _props?.returnTo ?? props()?.returnTo;
+    this.returnTo = rt ? String(rt) : null;
     if (want) this.openDetail(want, cx);
     this.refresh(cx);
     // The hidden scope refreshes when it's switched back to, if it's stale.
@@ -111,7 +115,12 @@ export default class AdoWorkItems extends View {
     const self = this;
     return {
       get org() { return self.org; },
-      back(cx) { self.detail = null; cx.notify(); },
+      backLabel: this.returnTo ? `Back to ${this.returnTo}` : "Back to the list",
+      back(cx) {
+        if (self.returnTo && props()?.overlay) return self.dismiss();
+        self.detail = null;
+        cx.notify();
+      },
       openDetail: (id, cx) => this.openDetail(id, cx),
       refine: (it) => this.refine(it),
       // A save: patch the item in whichever lists hold it.

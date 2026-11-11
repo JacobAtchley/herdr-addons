@@ -140,6 +140,9 @@ export default class AdoPipelines extends View {
     this.detail = null; // { run, records, tree, error, loading, sel, log, lines, shown, logError, errorsOnly, folded }
     // props {project, build} open straight to that run (another mod or a pane can ask).
     const p = props() ?? {};
+    // props.returnTo (e.g. "Pull request"): opened by another mod just for
+    // this run, so the back arrow closes the dialog and returns there.
+    this.returnTo = p.returnTo ? String(p.returnTo) : null;
     if (p.project && p.build) {
       this.openRun({ id: Number(p.build), project: p.project, def: `Run ${p.build}`, status: "inProgress" }, cx);
     }
@@ -213,6 +216,7 @@ export default class AdoPipelines extends View {
   }
 
   closeRun(cx) {
+    if (this.returnTo && props()?.overlay) return this.dismiss();
     this.detail = null;
     cx.notify();
     if (Date.now() - this.fetched > LIST_MS) this.refresh(cx);
@@ -421,7 +425,7 @@ export default class AdoPipelines extends View {
     const [, color, label] = look(t, r);
     const url = `${this.base(r.project)}/_build/results?buildId=${r.id}&view=results`;
     const head = h_flex().flex_none().px(12).py(10).gap(10).items_center().border_b(1).border_color(t.border)
-      .child(this.iconButton(t, "back", "mods/ado-pipelines/back.svg", "Back to runs", (_e, cx) => this.closeRun(cx)))
+      .child(this.iconButton(t, "back", "mods/ado-pipelines/back.svg", this.returnTo ? `Back to ${this.returnTo}` : "Back to runs", (_e, cx) => this.closeRun(cx)))
       .child(this.glyph(t, r, 15))
       .child(v_flex().flex_1().min_w(0).gap(1)
         .child(h_flex().gap(8).items_center().min_w(0)

@@ -8,7 +8,7 @@
 
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, TextView, Popover } from "gpui-base";
-import { exec, run, appHome } from "herdr";
+import { exec, appHome, openOverlay } from "herdr";
 import { readFile, writeFile, mkdir, exists, unlink } from "fs/promises";
 import { Drafts, draftKey, prKey } from "./drafts.js";
 import {
@@ -103,6 +103,12 @@ function drafts() {
 }
 
 const msg = (e) => String(e?.message ?? e);
+
+// The sizes those mods' mod.json give their dialogs.
+const DIALOG_SIZE = {
+  "ado-pipelines": { width: 0.9, height: 0.86 },
+  "ado-workitems": { width: 0.8, height: 0.8 },
+};
 
 export class Review {
   /**
@@ -373,13 +379,16 @@ export class Review {
 
   openGate(gate) {
     const a = gateAction(gate);
-    if (a.kind === "build") this.split("ado-pipelines", { project: a.project, build: a.build });
+    if (a.kind === "build") this.stack("ado-pipelines", { project: a.project, build: a.build });
     else if (a.kind === "url") this.browse(a.url);
   }
 
-  split(mod, props) {
+  // Open another ADO mod (a run, a work item) as a dialog on top of this one;
+  // its back arrow ("Back to Pull request") and Esc return here.
+  stack(mod, props) {
+    const size = DIALOG_SIZE[mod] ?? { width: 0.9, height: 0.86 };
     try {
-      run("pane.split", { direction: "right", mod, props });
+      openOverlay({ mod, kind: "dialog", ...size, props: { ...props, returnTo: "Pull request" } });
     } catch (e) {
       this.host.notify(msg(e));
     }
@@ -506,7 +515,7 @@ export class Review {
     const items = pr.workItems.map((w) => h_flex().id(`rv-swi-${w.id}`).flex_none().gap(4).items_center().text_size(11.5)
       .cursor_pointer().hover((s) => s.opacity(0.75))
       .tooltip(`${w.title ? `${w.title}\n` : ""}Click to open beside this view`)
-      .on_click(() => this.split("ado-workitems", { detail: w.id }))
+      .on_click(() => this.stack("ado-workitems", { detail: w.id }))
       .child(div().text_color(t.dim).child("Work item"))
       .child(div().text_color(t.accent).child(`#${w.id}`)));
     const sep = () => div().flex_none().w(1).h(14).bg(t.border);
@@ -632,8 +641,8 @@ export class Review {
     return div().id("rv-overview").flex_1().h_full().min_w(0).overflow_y_scrollbar().child(v_flex().px(20).py(16).gap(18)
       .when(pr.workItems.length > 0, (el) => el.child(v_flex().gap(4).child(section(t, "Work items", pr.workItems.length))
         .children(pr.workItems.map((w) => h_flex().id(`rv-wi-${w.id}`).px(8).py(4).gap(8).items_center().rounded(6).cursor_pointer()
-          .hover((s) => s.bg(t.hover)).tooltip("Open beside this view")
-          .on_click(() => this.split("ado-workitems", { detail: w.id }))
+          .hover((s) => s.bg(t.hover)).tooltip("Open the work item")
+          .on_click(() => this.stack("ado-workitems", { detail: w.id }))
           .child(div().flex_none().text_size(12).text_color(t.accent).child(`#${w.id}`))
           .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(w.title ?? ""))))))
       .child(v_flex().gap(8).child(section(t, "Description"))
