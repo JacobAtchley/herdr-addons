@@ -160,13 +160,19 @@ export function lineLengths(rows, side, line, endLine) {
 
 /**
  * Whether a file draft can be placed in the diff for `range`. Its line numbers
- * belong to one version: left = the base (range.from), right = the latest push
- * (range.to). A draft written against another version is not placed (it is
- * listed as unplaced) so it can never post on a shifted line. Drafts saved
- * without a range (older format) are placed by line.
+ * belong to one version: left = the base (range.from; in All changes, from is
+ * null and the base is the merge base of range.to, which moves with the
+ * target branch), right = the latest push (range.to). A draft written against
+ * another version is not placed (it is listed as unplaced) so it can never
+ * post on a shifted line. Drafts saved without a range (older format) are
+ * placed by line.
  */
 export function draftFits(target, range) {
   if (!target?.range) return true;
-  if (target.side === "left") return (target.range.from ?? null) === (range?.from ?? null);
+  if (target.side === "left") {
+    const from = target.range.from ?? null;
+    if (from !== (range?.from ?? null)) return false;
+    return from != null || target.range.to === range?.to;
+  }
   return target.range.to === range?.to;
 }

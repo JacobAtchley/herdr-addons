@@ -1,17 +1,35 @@
 // Persisted unsent review comments. Pure: the caller supplies load/save.
 // Stored shape: { [prKey]: { [draftKey]: { body, target, updated } } }
+//
+// Several Drafts instances (one per mod copy: dialog, split pane) share one
+// file, so a save never writes this instance's whole snapshot: it re-reads the
+// file and replaces only the PR maps this instance touched (mergeDrafts).
 
 const DEBOUNCE_MS = 300;
 
 export function draftKey(t) {
   if (t.general) return "g";
   if (t.thread != null) return `t:${t.thread}`;
-  // A file draft's line numbers belong to one version (left: the base,
-  // right: the latest push); it is part of the key so a draft from another
-  // version never shares a box with a line clicked in this one.
+  // A file draft's line numbers belong to one version (left: the base — in
+  // All changes the merge base of iteration `to`, hence "base<to>"; right:
+  // the latest push); it is part of the key so a draft from another version
+  // never shares a box with a line clicked in this one.
   const base = `f:${t.side}:${t.file}:${t.line}-${t.endLine ?? t.line}`;
   if (!t.range) return base;
-  return `${base}@${t.side === "left" ? t.range.from ?? "base" : t.range.to}`;
+  return `${base}@${t.side === "left" ? t.range.from ?? `base${t.range.to}` : t.range.to}`;
+}
+
+/**
+ * `current` (the file as read now) with each PR map in `parts` replaced; a
+ * null or empty map removes that PR. PRs not in `parts` are kept as they are.
+ */
+export function mergeDrafts(current, parts) {
+  const out = current && typeof current === "object" && !Array.isArray(current) ? { ...current } : {};
+  for (const [p, map] of Object.entries(parts)) {
+    if (map && Object.keys(map).length) out[p] = map;
+    else delete out[p];
+  }
+  return out;
 }
 
 export function prKey(ref) {
@@ -30,6 +48,7 @@ export class Drafts {
     this._pr = null;
     this._timer = null;
     this._inflight = Promise.resolve();
+    this._touched = new Set(); // PR keys changed since the last save started
   }
 
   // Overlapping open() calls are serialized: each runs after the previous one
@@ -85,7 +104,7 @@ export class Drafts {
     let pruned = false;
     for (const [p, map] of Object.entries(this._data)) {
       for (const [k, v] of Object.entries(map)) {
-        if (!(v.updated >= cutoff)) { delete map[k]; pruned = true; }
+        if (!(v.updated >= cutoff)) { delete map[k]; pruned = true; this._touched.add(p); }
       }
       if (Object.keys(map).length === 0) delete this._data[p];
     }
@@ -103,6 +122,7 @@ export class Drafts {
     // A newer set wins over a delete queued during a load.
     if (this._pendingDeletes?.length) this._pendingDeletes = this._pendingDeletes.filter(([k, o]) => k !== key || o.pr !== pr);
     (this._data[pr] ??= {})[key] = { body, target, updated: this._now() };
+    this._touched.add(pr);
     this._schedule();
   }
 
@@ -128,6 +148,7 @@ export class Drafts {
     if (ifBody != null && String(map[key].body ?? "").trim() !== String(ifBody).trim()) return;
     delete map[key];
     if (Object.keys(map).length === 0) delete this._data[pr];
+    this._touched.add(pr);
     this._schedule();
   }
 
@@ -163,10 +184,23 @@ export class Drafts {
     this._timer.unref?.();
   }
 
+  // Snapshot the touched PR maps now; in order, re-read the file, merge them
+  // in and save. A failed save marks them touched again so the next one retries.
   _write() {
     if (this._loading || this._unsafe) return Promise.resolve();
-    const snapshot = structuredClone(this._data); // taken now, saved in order
-    const p = this._inflight.catch(() => {}).then(() => this._save(snapshot));
+    const touched = [...this._touched];
+    this._touched.clear();
+    if (!touched.length) return this._inflight;
+    const parts = {};
+    for (const p of touched) parts[p] = this._data[p] ? structuredClone(this._data[p]) : null;
+    const p = this._inflight.catch(() => {}).then(async () => {
+      try {
+        await this._save(mergeDrafts(await this._load(), parts));
+      } catch (e) {
+        for (const k of touched) this._touched.add(k);
+        throw e;
+      }
+    });
     this._inflight = p;
     return p;
   }

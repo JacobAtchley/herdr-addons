@@ -217,9 +217,25 @@ test("left-side comment context", () => {
   assert.equal(c.threadContext.filePath, "src/A.cs");
   assert.equal(c.threadContext.rightFileStart, undefined);
   assert.equal(c.threadContext.rightFileEnd, undefined);
-  assert.equal(c.pullRequestThreadContext.iterationContext.firstComparingIteration, 1);
+  // All changes: the left side is the merge base of iteration `to` (first == second).
+  assert.equal(c.pullRequestThreadContext.iterationContext.firstComparingIteration, 2);
   assert.equal(c.pullRequestThreadContext.iterationContext.secondComparingIteration, 2);
   assert.equal(c.pullRequestThreadContext.changeTrackingId, 7);
+});
+
+test("left-side comment in All changes on a multi-iteration PR compares the merge base of `to`, not iteration 1", () => {
+  const c = buildThreadContext({ file: "/src/A.cs", side: "left", line: 5, lineLength: 3, range: { from: null, to: 5 }, changeTrackingId: 1 });
+  assert.deepEqual(c.pullRequestThreadContext.iterationContext, { firstComparingIteration: 5, secondComparingIteration: 5 });
+  // Since last look keeps the explicit base iteration.
+  const s = buildThreadContext({ file: "/src/A.cs", side: "left", line: 5, lineLength: 3, range: { from: 3, to: 5 }, changeTrackingId: 1 });
+  assert.deepEqual(s.pullRequestThreadContext.iterationContext, { firstComparingIteration: 3, secondComparingIteration: 5 });
+});
+
+test("fileUrl links a file in the PR's web view", () => {
+  const p = createAdoProvider({ rest: async () => null, org: "contoso-demo" });
+  const m = mapPullRequest(pr, iterations, [], [], []);
+  assert.equal(p.fileUrl(m, "/src/My File.cs"), `${m.url}?_a=files&path=${encodeURIComponent("/src/My File.cs")}`);
+  assert.equal(p.fileUrl({ url: null }, "/a"), null);
 });
 
 test("right-side range comment context", () => {

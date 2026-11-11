@@ -161,7 +161,9 @@ export function buildThreadContext({ file, side, line, endLine, lineLength, endL
     },
     pullRequestThreadContext: {
       changeTrackingId,
-      iterationContext: { firstComparingIteration: range.from ?? 1, secondComparingIteration: range.to },
+      // first == second means "left side = the merge base (common commit) of
+      // that iteration", which is exactly what All changes shows on the left.
+      iterationContext: { firstComparingIteration: range.from ?? range.to, secondComparingIteration: range.to },
     },
   };
 }
@@ -257,7 +259,7 @@ export function createAdoProvider({ rest, org }) {
       `path=${enc(path)}&versionDescriptor.version=${enc(sha)}&versionDescriptor.versionType=commit&includeContent=true&includeContentMetadata=true&$format=json`));
     // Without $format=json ADO returns raw text. isBinary is absent for text files.
     // Strip one leading BOM so a BOM-only difference doesn't mark line 1 changed.
-    return { content: (r?.content ?? "").replace(/^﻿/, ""), binary: !!r?.contentMetadata?.isBinary };
+    return { content: (r?.content ?? "").replace(/^\uFEFF/, ""), binary: !!r?.contentMetadata?.isBinary };
   }
 
   async function getFileContents(ref, file, range) {
@@ -326,8 +328,13 @@ export function createAdoProvider({ rest, org }) {
     return !!r?.isDraft;
   }
 
+  /** Web link to one file of a PR (as returned by getPullRequest); null without a PR link. */
+  function fileUrl(pr, path) {
+    return pr?.url ? `${pr.url}?_a=files&path=${enc(path)}` : null;
+  }
+
   return {
     capabilities: { votes: Object.keys(VOTES), draft: true },
-    me, getPullRequest, listFiles, getFileContents, listThreads, addThread, reply, setThreadStatus, vote, setDraft,
+    fileUrl, me, getPullRequest, listFiles, getFileContents, listThreads, addThread, reply, setThreadStatus, vote, setDraft,
   };
 }

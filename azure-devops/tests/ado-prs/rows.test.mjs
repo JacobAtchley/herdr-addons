@@ -134,6 +134,10 @@ test("draftFits: left drafts need the same base, right drafts the same latest pu
   // Right side: fresh (same `to`, base irrelevant) vs stale (a newer push moved the lines).
   assert.equal(draftFits({ side: "right", range: { from: null, to: 4 } }, { from: 2, to: 4 }), true);
   assert.equal(draftFits({ side: "right", range: { from: null, to: 3 } }, { from: null, to: 4 }), false);
+  // All changes: a left draft's lines are the merge base of iteration `to`;
+  // after a push (the target may have moved) it is unplaced, like a right draft.
+  assert.equal(draftFits({ side: "left", range: { from: null, to: 4 } }, { from: null, to: 4 }), true);
+  assert.equal(draftFits({ side: "left", range: { from: null, to: 4 } }, { from: null, to: 5 }), false);
   assert.equal(draftFits({ side: "left" }, { from: 2, to: 4 }), true);
   assert.equal(draftFits({ side: "right" }, { from: 2, to: 4 }), true);
 });

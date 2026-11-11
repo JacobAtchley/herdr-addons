@@ -31,6 +31,7 @@ export function voteName(n) {
  *   endLineLength?: number} | {general: true}} CommentTarget
  * @typedef {{
  *   capabilities: {votes: string[], draft: boolean},
+ *   fileUrl(pr: PullRequest, path: string): string|null,
  *   me(): Promise<{id: string, name: string}>,
  *   getPullRequest(ref: Ref): Promise<PullRequest>,
  *   listFiles(ref: Ref, range: Range): Promise<FileChange[]>,
