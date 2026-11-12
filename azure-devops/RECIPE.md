@@ -193,6 +193,15 @@ chip.
   - a "Last 14 days" column chart, 96px tall, with days outside the window at
     40% opacity
   - the first 8 items, then "Show all N"
+- **Chart filters** (Completed, New work, Build failures): clicking a bar
+  narrows that card's list to it. Clicking a person or pipeline row selects the
+  whole bar. Clicking a colored segment selects just that part, such as Closed
+  or Failed. In the 14-day chart, clicking a day selects that day, even one
+  outside the window. The selected bar keeps its color and every other bar
+  drops to 30% opacity. The count chip reads "N of M". A `selected` chip in the
+  card header names the filter, followed by an x; clicking it ("Clear the
+  filter and show all") shows everything again. Clicking the same bar again
+  also clears the filter. Filters are per card and reset when you switch teams.
 - **PRs needing review**: oldest first. Each row has an age bar under it in
   `#9085e9`, or `#fab219` once the PR is 5 or more days old. Clicking a row
   opens the PR in the `ado-prs` review view as a dialog on top of the
@@ -303,8 +312,8 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - **Images** in rich fields and comments download in the background and show
   inline, at most 640 x 420px. Click one for a 97% x 95% viewer dialog with
   "Open in Preview".
-- **Standup filters.** The window and person filters are local. Clicking a
-  person's bar in Completed toggles the person filter. Switching team reloads.
+- **Standup filters.** The window and person filters are local. Chart
+  filters narrow one card and stack on top of them. Switching team reloads.
   An item counts as completed when its state category is Completed (by closed
   date) or Resolved, meaning moved to QA (by resolved date).
 - **Impediments** come from four rules:
