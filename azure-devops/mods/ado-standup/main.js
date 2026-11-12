@@ -41,6 +41,10 @@ const ICON = (n) => `mods/ado-standup/${n}.svg`;
 // Dark-surface categorical slots and the reserved status steps (validated against
 // the catppuccin surface with the dataviz validator: all six checks pass).
 const C = { blue: "#3987e5", orange: "#d95926", aqua: "#199e70", yellow: "#c98500", magenta: "#d55181", violet: "#9085e9" };
+// New work's color per work item type, from the same six slots; other types are grey.
+const TYPE_COLOR = { "User Story": C.blue, "Technical Story": C.aqua, Task: C.yellow, Feature: C.violet, Bug: C.orange, Defect: C.magenta };
+const CONTAINER_TYPES = new Set(["Epic", "Feature"]);
+const typeColor = (type) => TYPE_COLOR[type] ?? "#7f8796";
 const S = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 
 // ---- time
@@ -96,6 +100,7 @@ export default class Standup extends View {
     this.who = null; // a member's mail, or null for everyone
     this.prBuilds = false; // include PR validation runs in build failures
     this.open = {}; // expanded rows
+    this.focus = {}; // chart filters per card: { completed: {person, cat, day}, new: {type}, builds: {pipeline, cat} }
     this.data = null;
     this.error = null;
     this.loading = false;
@@ -155,6 +160,32 @@ export default class Standup extends View {
 
   browse(url) {
     if (url) exec("open", [url]).catch((e) => notify({ title: "Couldn't open", body: String(e?.message ?? e), level: "error" }));
+  }
+
+  // Click a bar to narrow its card's list to that bar; click it again, or the
+  // card's clear chip, to show everything. A patch sets several keys at once
+  // (a person's whole bar is {person, cat: null}); re-clicking the same patch clears it.
+  toggleFocus(card, patch, cx) {
+    const cur = { ...(this.focus[card] ?? {}) };
+    const same = Object.entries(patch).every(([k, v]) => (cur[k] ?? null) === v);
+    for (const [k, v] of Object.entries(patch)) {
+      if (same || v == null) delete cur[k]; else cur[k] = v;
+    }
+    if (Object.keys(cur).length) this.focus[card] = cur; else delete this.focus[card];
+    delete this.open[card];
+    cx.notify();
+  }
+
+  // The "filtered: … ✕" chip in a card's header, or null when nothing is filtered.
+  clearChip(t, card, label) {
+    if (!this.focus[card]) return null;
+    return h_flex().id(`clear-${card}`).gap(5).px(8).py(2).rounded(6).items_center().cursor_pointer().bg(t.selected)
+      .tooltip("Clear the filter and show all")
+      .hover((s) => s.bg(t.hover))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { delete this.focus[card]; delete this.open[card]; cx.notify(); })
+      .child(div().text_size(11.5).text_color(t.foreground).child(label))
+      .child(svg(ICON("x")).size(11).text_color(t.muted));
   }
 
   // ---- derived
@@ -247,7 +278,7 @@ export default class Standup extends View {
         .child(div().text_size(13).font_semibold().child(title))
         .when(count != null, (el) => el.child(div().px(6).rounded(8).bg(t.selected).text_size(11).text_color(t.muted).child(String(count))))
         .child(div().flex_1())
-        .when(Boolean(right), (el) => el.child(right)))
+        .children([right].flat().filter(Boolean)))
       .child(v_flex().px(14).pb(12).gap(2).child(body));
   }
 
@@ -260,26 +291,29 @@ export default class Standup extends View {
       h_flex().gap(5).items_center().child(div().size(8).rounded(2).bg(color)).child(div().text_size(11).text_color(t.muted).child(label))));
   }
 
-  // A horizontal bar chart: rows [{key, label, segs: [{n, color, tip}]}], one shared scale.
+  // A horizontal bar chart: rows [{key, label, segs: [{n, color, tip, onClick, dim}], onClick, dim}],
+  // one shared scale. Clicking a segment runs its onClick; the rest of the row runs the row's.
   hbars(t, id, rows, { labelW = 120 } = {}) {
     const max = Math.max(1, ...rows.map((r) => r.segs.reduce((a, s) => a + s.n, 0)));
     return v_flex().gap(5).children(rows.map((r) => {
       const total = r.segs.reduce((a, s) => a + s.n, 0);
       const segs = r.segs.filter((s) => s.n > 0);
-      return h_flex().id(`${id}-${r.key}`).gap(8).items_center().h(18)
-        .when(Boolean(r.onClick), (el) => el.cursor_pointer().on_click(r.onClick))
-        .child(div().flex_none().w(labelW).truncate().text_size(11.5).text_color(r.active ? t.foreground : t.muted).text_right().child(r.label))
+      return h_flex().id(`${id}-${r.key}`).gap(8).items_center().h(18).rounded(4)
+        .when(Boolean(r.onClick), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click(r.onClick))
+        .child(div().flex_none().w(labelW).truncate().text_size(11.5).text_color(r.active ? t.foreground : t.muted).text_right()
+          .when(Boolean(r.active), (el) => el.font_semibold()).child(r.label))
         .child(h_flex().flex_1().min_w(0).h(12).gap(2)
           .child(h_flex().h_full().gap(2).w(`${(100 * total) / max}%`).children(segs.map((s, i) =>
             div().id(`${id}-${r.key}-${i}`).h_full().flex_grow(s.n).flex_basis(0)
               .rounded_l(i === 0 ? 2 : 0).rounded_r(i === segs.length - 1 ? 4 : 0)
-              .bg(s.color).tooltip(s.tip ?? `${s.n}`)))))
+              .bg(s.color).opacity(r.dim || s.dim ? 0.3 : 1).tooltip(s.tip ?? `${s.n}`)
+              .when(Boolean(s.onClick), (el) => el.on_click((e, cx) => { cx.stop_propagation(); s.onClick(e, cx); }))))))
         .child(div().flex_none().w(24).text_size(11.5).text_color(t.foreground).child(String(total)));
     }));
   }
 
   // Completed per day for the last 14 days, the window's days lit.
-  throughput(t, m) {
+  throughput(t, m, onDay = null, picked = null) {
     const today = startOfDay(Date.now()).getTime();
     const days = [];
     for (let i = 13; i >= 0; i--) days.push(today - i * DAY);
@@ -292,11 +326,12 @@ export default class Standup extends View {
     const H = 96;
     return v_flex().gap(6)
       .child(h_flex().h(H).gap(4).items_end().children(per.map((p, i) => {
-        const lit = p.d >= m.since;
+        const lit = picked != null ? p.d === picked : p.d >= m.since;
         const total = p.closed + p.qa;
         const day = new Date(p.d);
         return v_flex().id(`tp-${i}`).flex_1().min_w(0).h_full().justify_end().gap(2)
           .tooltip(`${DAYNAME[day.getDay()]} ${day.getMonth() + 1}/${day.getDate()}: ${p.closed} closed, ${p.qa} to QA`)
+          .when(Boolean(onDay) && total > 0, (el) => el.cursor_pointer().on_click((_e, cx) => onDay(p.d, cx)))
           .when(total > 0, (el) => el
             .when(p.qa > 0, (e) => e.child(div().w_full().h(Math.max(2, (H - 4) * p.qa / max)).rounded_t(4).bg(C.aqua).opacity(lit ? 1 : 0.4)))
             .when(p.closed > 0, (e) => e.child(div().w_full().h(Math.max(2, (H - 4) * p.closed / max)).rounded_t(p.qa > 0 ? 0 : 4).bg(C.blue).opacity(lit ? 1 : 0.4))))
@@ -304,7 +339,7 @@ export default class Standup extends View {
       })))
       .child(h_flex().gap(4).children(per.map((p, i) => {
         const day = new Date(p.d);
-        return div().flex_1().min_w(0).text_size(10).text_color(p.d >= m.since ? t.muted : t.dim).text_center()
+        return div().flex_1().min_w(0).text_size(10).text_color(p.d === picked ? t.foreground : p.d >= m.since ? t.muted : t.dim).text_center()
           .child(day.getDay() === 1 || i === 13 || i === 0 ? `${DAYNAME[day.getDay()][0]} ${day.getDate()}` : DAYNAME[day.getDay()][0]);
       })));
   }
@@ -346,7 +381,6 @@ export default class Standup extends View {
   }
 
   completedCard(t, m) {
-    const d = this.data;
     const people = new Map();
     for (const w of m.completed) {
       const k = lc(w.assigned?.mail) || "unassigned";
@@ -354,27 +388,104 @@ export default class Standup extends View {
       if (w.category === "Completed") p.closed++; else p.qa++;
       people.set(k, p);
     }
-    const rows = [...people.values()].sort((a, b) => b.closed + b.qa - (a.closed + a.qa)).map((p) => ({
-      key: p.mail.replace(/[^a-z0-9]/g, ""), label: p.name, active: this.who === p.mail,
-      segs: [{ n: p.closed, color: C.blue, tip: `${p.name}: ${p.closed} closed` }, { n: p.qa, color: C.aqua, tip: `${p.name}: ${p.qa} moved to QA` }],
-      onClick: (_e, cx) => { if ((d.members ?? []).some((x) => x.mail === p.mail)) { this.who = this.who === p.mail ? null : p.mail; cx.notify(); } },
-    }));
     const key = "completed";
-    const shown = this.open[key] ? m.completed : m.completed.slice(0, 8);
-    return this.card(t, "c-completed", "Completed", m.completed.length,
+    const f = this.focus[key] ?? {};
+    const personOf = (w) => lc(w.assigned?.mail) || "unassigned";
+    const seg = (p, cat, n, color, tip) => ({ n, color, tip, dim: Boolean(f.cat) && f.person === p.mail && f.cat !== cat,
+      onClick: (_e, cx) => this.toggleFocus(key, { person: p.mail, cat }, cx) });
+    const rows = [...people.values()].sort((a, b) => b.closed + b.qa - (a.closed + a.qa)).map((p) => ({
+      key: p.mail.replace(/[^a-z0-9]/g, ""), label: p.name, active: f.person === p.mail, dim: Boolean(f.person) && f.person !== p.mail,
+      segs: [seg(p, "Completed", p.closed, C.blue, `${p.name}: ${p.closed} closed`), seg(p, "Resolved", p.qa, C.aqua, `${p.name}: ${p.qa} moved to QA`)],
+      onClick: (_e, cx) => this.toggleFocus(key, { person: p.mail, cat: null }, cx),
+    }));
+    // A picked day lists that day's items, even before the window.
+    const base = f.day == null ? m.completed : m.items.filter((w) => {
+      const x = ms(doneAt(w));
+      return m.done(w) && x >= f.day && x < f.day + DAY && this.is(w.assigned);
+    }).sort((a, b) => ms(doneAt(b)) - ms(doneAt(a)));
+    const list = base.filter((w) => (!f.person || personOf(w) === f.person) && (!f.cat || w.category === f.cat));
+    const shown = this.open[key] ? list : list.slice(0, 8);
+    const day = f.day == null ? null : new Date(f.day);
+    const chip = [
+      f.person ? (people.get(f.person)?.name ?? (this.data.members ?? []).find((x) => x.mail === f.person)?.name ?? (f.person === "unassigned" ? "Unassigned" : f.person)) : null,
+      f.cat ? (f.cat === "Completed" ? "closed" : "to QA") : null,
+      day ? `${DAYNAME[day.getDay()]} ${day.getMonth() + 1}/${day.getDate()}` : null,
+    ].filter(Boolean).join(" · ");
+    return this.card(t, "c-completed", "Completed", this.focus[key] ? `${list.length} of ${m.completed.length}` : m.completed.length,
       v_flex().gap(10)
         .child(this.legend(t, [["Closed", C.blue], ["Moved to QA", C.aqua]]))
         .child(rows.length ? this.hbars(t, "cb", rows) : this.empty(t, "Nothing completed in this window."))
         .child(div().h(1).bg(t.border))
         .child(div().text_size(11).text_color(t.dim).child("Last 14 days"))
-        .child(this.throughput(t, m))
+        .child(this.throughput(t, m, (d, cx) => this.toggleFocus(key, { day: d }, cx), f.day ?? null))
         .child(div().h(1).bg(t.border))
+        .when(Boolean(this.focus[key]) && list.length === 0, (el) => el.child(this.empty(t, "Nothing matches this filter.")))
         .child(v_flex().children(shown.map((w) => this.row(t, `cw-${w.id}`, {
           title: w.title, sub: `#${w.id} · ${w.type} · ${w.assigned?.name ?? "unassigned"}`,
           right: `${w.category === "Completed" ? "closed" : w.state} ${ago(doneAt(w))}`,
           lead: w.category === "Completed" ? C.blue : C.aqua, url: w.url,
         }))))
-        .when(m.completed.length > 8, (el) => el.child(this.more(t, key, m.completed.length))));
+        .when(list.length > 8, (el) => el.child(this.more(t, key, list.length))), this.clearChip(t, key, chip));
+  }
+
+  // Working on: per person, their current item (the Active one changed most
+  // recently) and counts of everything else they hold that isn't done. Epics
+  // and Features are containers, not work in hand, so they're left out.
+  nowCard(t, m) {
+    const d = this.data;
+    const people = new Map();
+    for (const p of d.members ?? []) people.set(lc(p.mail), { name: p.name, mail: lc(p.mail), items: [] });
+    for (const w of m.items) {
+      if (w.category !== "InProgress" || !w.assigned?.mail || CONTAINER_TYPES.has(w.type)) continue;
+      const k = lc(w.assigned.mail);
+      const p = people.get(k) ?? { name: w.assigned.name, mail: k, items: [] };
+      p.items.push(w);
+      people.set(k, p);
+    }
+    const isActive = (w) => lc(w.state) === "active";
+    const rows = [...people.values()].filter((p) => this.is({ mail: p.mail })).map((p) => {
+      const active = p.items.filter(isActive).sort((a, b) => ms(b.changed) - ms(a.changed));
+      return { ...p, current: active[0] ?? null, rest: p.items.filter((w) => w !== active[0]) };
+    }).sort((a, b) => Number(!a.current) - Number(!b.current) || a.name.localeCompare(b.name));
+    const ORDER = ["Active", "Code Review", "Pending QA", "Blocked", "On-Hold", "Proposed"];
+    const rank = (s) => { const i = ORDER.findIndex((x) => lc(x) === lc(s)); return i < 0 ? ORDER.length : i; };
+    return this.card(t, "c-now", "Working on", rows.filter((r) => r.current).length + " of " + rows.length,
+      rows.length ? v_flex().gap(2).children(rows.map((p) => {
+        const id = p.mail.replace(/[^a-z0-9]/g, "");
+        const key = `now-${id}`;
+        const groups = new Map();
+        for (const w of p.rest) groups.set(w.state, [...(groups.get(w.state) ?? []), w]);
+        const states = [...groups.keys()].sort((a, b) => rank(a) - rank(b));
+        const picked = this.open[key];
+        const w = p.current;
+        const stale = w && ageDays(w.changed) >= STALE_DAYS;
+        const chips = h_flex().gap(4).flex_wrap().children(states.map((st) => {
+          const n = groups.get(st).length;
+          const label = lc(st) === "active" ? `+${n} active` : `${n} ${lc(st)}`;
+          const warn = lc(st) === "blocked" || lc(st) === "on-hold";
+          return div().id(`${key}-${st.replace(/\W/g, "")}`).px(6).py(1).rounded(5).cursor_pointer().text_size(11)
+            .text_color(picked === st ? t.foreground : warn ? S.serious : t.muted).bg(picked === st ? t.selected : t.surface)
+            .hover((s) => s.bg(t.hover)).tooltip(picked === st ? "Hide" : `Show ${p.name.split(/\s+/)[0]}'s ${lc(st)} items`)
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => { cx.stop_propagation(); this.open[key] = picked === st ? undefined : st; cx.notify(); })
+            .child(label);
+        }));
+        return v_flex()
+          .child(h_flex().gap(10).items_center()
+            .child(div().flex_none().w(130).truncate().text_size(12).text_color(w ? t.foreground : t.muted).child(p.name))
+            .child(div().flex_1().min_w(0).child(w
+              ? this.row(t, `now-${id}-cur`, {
+                title: w.title, sub: `#${w.id} · ${w.type}`,
+                right: `updated ${ago(w.changed)} ago`, rightColor: stale ? S.warning : t.muted,
+                lead: typeColor(w.type), url: w.url, tip: stale ? `No change in ${Math.floor(ageDays(w.changed))} days` : null,
+              })
+              : div().px(8).py(5).text_size(12).text_color(S.warning).child("No active item")))
+            .child(div().flex_none().w(280).child(chips)))
+          .when(Boolean(picked && groups.get(picked)), (el) => el.child(v_flex().pl(140).children((groups.get(picked) ?? [])
+            .sort((a, b) => ms(b.changed) - ms(a.changed))
+            .map((x) => this.row(t, `now-${id}-${x.id}`, { title: x.title, sub: `#${x.id} · ${x.type} · ${x.state}`,
+              right: ago(x.changed), lead: typeColor(x.type), url: x.url })))));
+      })) : this.empty(t, "No one on this team has open work."));
   }
 
   more(t, key, n) {
@@ -407,18 +518,25 @@ export default class Standup extends View {
   newCard(t, m) {
     const by = new Map();
     for (const w of m.created) by.set(w.type, (by.get(w.type) ?? 0) + 1);
-    const rows = [...by.entries()].sort((a, b) => b[1] - a[1]).map(([type, n]) => ({ key: type.replace(/\W/g, ""), label: type, segs: [{ n, color: C.orange, tip: `${n} ${type}` }] }));
     const key = "new";
-    const shown = this.open[key] ? m.created : m.created.slice(0, 8);
-    return this.card(t, "c-new", "New work", m.created.length,
+    const f = this.focus[key] ?? {};
+    const rows = [...by.entries()].sort((a, b) => b[1] - a[1]).map(([type, n]) => ({
+      key: type.replace(/\W/g, ""), label: type, active: f.type === type, dim: Boolean(f.type) && f.type !== type,
+      segs: [{ n, color: typeColor(type), tip: `${n} ${type}` }],
+      onClick: (_e, cx) => this.toggleFocus(key, { type }, cx),
+    }));
+    const list = f.type ? m.created.filter((w) => w.type === f.type) : m.created;
+    const shown = this.open[key] ? list : list.slice(0, 8);
+    return this.card(t, "c-new", "New work", f.type ? `${list.length} of ${m.created.length}` : m.created.length,
       v_flex().gap(10)
         .child(rows.length ? this.hbars(t, "nb", rows) : this.empty(t, "Nothing new in this window."))
         .when(m.created.length > 0, (el) => el.child(div().h(1).bg(t.border)))
+        .when(Boolean(f.type) && list.length === 0, (el) => el.child(this.empty(t, "Nothing matches this filter.")))
         .child(v_flex().children(shown.map((w) => this.row(t, `nw-${w.id}`, {
           title: w.title, sub: `#${w.id} · ${w.type} · ${w.state} · by ${w.createdBy?.name ?? "?"}${w.assigned ? ` → ${first(w.assigned.name)}` : " · unassigned"}`,
-          right: ago(w.created), lead: C.orange, url: w.url,
+          right: ago(w.created), lead: typeColor(w.type), url: w.url,
         }))))
-        .when(m.created.length > 8, (el) => el.child(this.more(t, key, m.created.length))));
+        .when(list.length > 8, (el) => el.child(this.more(t, key, list.length))), this.clearChip(t, key, f.type ?? ""));
   }
 
   impCard(t, m) {
@@ -443,14 +561,21 @@ export default class Standup extends View {
       if (b.result === "failed") p.failed++; else p.partial++;
       by.set(b.pipeline, p);
     }
-    const rows = [...by.entries()].sort((a, b) => b[1].failed + b[1].partial - (a[1].failed + a[1].partial)).slice(0, 10).map(([name, p]) => ({
-      key: name.replace(/\W/g, ""), label: name,
-      segs: [{ n: p.failed, color: S.critical, tip: `${name}: ${p.failed} failed` }, { n: p.partial, color: S.serious, tip: `${name}: ${p.partial} partially succeeded` }],
-    }));
     const key = "builds";
-    const shown = this.open[key] ? m.failed : m.failed.slice(0, 6);
+    const f = this.focus[key] ?? {};
+    const seg = (name, cat, n, color, tip) => ({ n, color, tip, dim: Boolean(f.cat) && f.pipeline === name && f.cat !== cat,
+      onClick: (_e, cx) => this.toggleFocus(key, { pipeline: name, cat }, cx) });
+    const rows = [...by.entries()].sort((a, b) => b[1].failed + b[1].partial - (a[1].failed + a[1].partial)).slice(0, 10).map(([name, p]) => ({
+      key: name.replace(/\W/g, ""), label: name, active: f.pipeline === name, dim: Boolean(f.pipeline) && f.pipeline !== name,
+      segs: [seg(name, "failed", p.failed, S.critical, `${name}: ${p.failed} failed`), seg(name, "partial", p.partial, S.serious, `${name}: ${p.partial} partially succeeded`)],
+      onClick: (_e, cx) => this.toggleFocus(key, { pipeline: name, cat: null }, cx),
+    }));
+    const list = m.failed.filter((b) => (!f.pipeline || b.pipeline === f.pipeline)
+      && (!f.cat || (f.cat === "failed") === (b.result === "failed")));
+    const shown = this.open[key] ? list : list.slice(0, 6);
+    const chip = [f.pipeline, f.cat ? (f.cat === "failed" ? "failed" : "partial") : null].filter(Boolean).join(" · ");
     const toggle = this.pill(t, "pr-builds", this.prBuilds ? `PR builds ${m.prFailed} ✓` : `PR builds ${m.prFailed}`, this.prBuilds, (_e, cx) => { this.prBuilds = !this.prBuilds; cx.notify(); });
-    return this.card(t, "c-builds", "Build failures", m.failed.length,
+    return this.card(t, "c-builds", "Build failures", this.focus[key] ? `${list.length} of ${m.failed.length}` : m.failed.length,
       v_flex().gap(10)
         .when(rows.length > 0, (el) => el.child(this.legend(t, [["✗ Failed", S.critical], ["! Partially succeeded", S.serious]])))
         .child(rows.length ? this.hbars(t, "bb", rows, { labelW: 170 }) : this.empty(t, "No failed runs in this window."))
@@ -459,7 +584,8 @@ export default class Standup extends View {
           title: `${b.result === "failed" ? "✗" : "!"} ${b.pipeline}`, sub: `#${b.number} · ${b.branch} · ${b.by?.name ?? ""}${b.reason === "pullRequest" ? " · PR build" : ""}`,
           right: when(b.finished), lead: b.result === "failed" ? S.critical : S.serious, url: b.url,
         }))))
-        .when(m.failed.length > 6, (el) => el.child(this.more(t, key, m.failed.length))), toggle);
+        .when(Boolean(this.focus[key]) && list.length === 0, (el) => el.child(this.empty(t, "Nothing matches this filter.")))
+        .when(list.length > 6, (el) => el.child(this.more(t, key, list.length))), [this.clearChip(t, key, chip), toggle]);
   }
 
   deploysCard(t, m) {
@@ -509,7 +635,7 @@ export default class Standup extends View {
         .child(h_flex().gap(2).p(2).rounded(8).bg(t.background).children(teams.map((name) =>
           this.pill(t, `team-${name.replace(/\W/g, "")}`, name, name === this.team, (_e, cx) => {
             if (name === this.team) return;
-            this.team = name; this.who = null; this.data = null;
+            this.team = name; this.who = null; this.data = null; this.focus = {};
             localStorage.setItem("team", name);
             this.load(cx);
           }))))
@@ -547,6 +673,7 @@ export default class Standup extends View {
         .when(errs.length > 0, (el) => el.child(div().px(12).py(8).rounded(8).bg(S.critical + "22").text_size(12).text_color(t.foreground)
           .child(`Some data didn't load: ${errs.map(([k, v]) => `${k} (${v})`).join("; ")}`)))
         .child(this.tiles(t, m))
+        .child(this.nowCard(t, m))
         .child(h_flex().gap(12).items_start().child(this.completedCard(t, m)).child(this.reviewCard(t, m)))
         .child(h_flex().gap(12).items_start().child(this.impCard(t, m)).child(this.newCard(t, m)))
         .child(h_flex().gap(12).items_start().child(this.buildsCard(t, m)).child(this.deploysCard(t, m)))));

@@ -193,6 +193,27 @@ chip.
   - a "Last 14 days" column chart, 96px tall, with days outside the window at
     40% opacity
   - the first 8 items, then "Show all N"
+- **Chart filters** (Completed, New work, Build failures): clicking a bar
+  narrows that card's list to it. Clicking a person or pipeline row selects the
+  whole bar. Clicking a colored segment selects just that part, such as Closed
+  or Failed. In the 14-day chart, clicking a day selects that day, even one
+  outside the window. The selected bar keeps its color and every other bar
+  drops to 30% opacity. The count chip reads "N of M". A `selected` chip in the
+  card header names the filter, followed by an x; clicking it ("Clear the
+  filter and show all") shows everything again. Clicking the same bar again
+  also clears the filter. Filters are per card and reset when you switch teams.
+- **Working on** (full width, under the tiles): one row per team member, plus
+  anyone else holding open work in the team's area. A row has a 130px name,
+  then the person's current item: their Active item that changed most
+  recently, with its type-colored lead bar and "updated Nd ago". That text is
+  `#fab219` once the item has had no change for 3 or more days. Last come
+  chips for everything else they hold that isn't done ("+2 active",
+  "3 code review", "1 blocked"); blocked and on-hold chips are `#ec835a`.
+  Clicking a chip lists those items under the row, and clicking it again hides
+  them. A person with nothing Active shows "No active item" in `#fab219`.
+  People with a current item come first. Epics and Features are left out,
+  because they hold work rather than being work. The count chip reads
+  "N of M" people with a current item.
 - **PRs needing review**: oldest first. Each row has an age bar under it in
   `#9085e9`, or `#fab219` once the PR is 5 or more days old. Clicking a row
   opens the PR in the `ado-prs` review view as a dialog on top of the
@@ -203,7 +224,9 @@ chip.
 - **Impediments**: grouped as Failing main builds, Stuck PRs, Blocking tags and
   Stale in progress (3d+). It shows 6 per group, and each row's lead bar shows
   severity: `#d03b3b` critical, `#ec835a` serious, `#fab219` warning.
-- **New work**: bars by type in `#d95926`, then items.
+- **New work**: bars by type, then items, each in its type's color (bar and
+  row lead): User Story `#3987e5`, Technical Story `#199e70`, Task `#c98500`,
+  Feature `#9085e9`, Bug `#d95926`, Defect `#d55181`, any other type `#7f8796`.
 - **Build failures**: bars per pipeline (top 10, 170px labels): failed
   `#d03b3b`, partial `#ec835a`. A "PR builds N" pill in the card header includes
   PR validation runs. The card lists 6 runs, then "Show all".
@@ -303,8 +326,8 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - **Images** in rich fields and comments download in the background and show
   inline, at most 640 x 420px. Click one for a 97% x 95% viewer dialog with
   "Open in Preview".
-- **Standup filters.** The window and person filters are local. Clicking a
-  person's bar in Completed toggles the person filter. Switching team reloads.
+- **Standup filters.** The window and person filters are local. Chart
+  filters narrow one card and stack on top of them. Switching team reloads.
   An item counts as completed when its state category is Completed (by closed
   date) or Resolved, meaning moved to QA (by resolved date).
 - **Impediments** come from four rules:
