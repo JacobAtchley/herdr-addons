@@ -43,6 +43,7 @@ const ICON = (n) => `mods/ado-standup/${n}.svg`;
 const C = { blue: "#3987e5", orange: "#d95926", aqua: "#199e70", yellow: "#c98500", magenta: "#d55181", violet: "#9085e9" };
 // New work's color per work item type, from the same six slots; other types are grey.
 const TYPE_COLOR = { "User Story": C.blue, "Technical Story": C.aqua, Task: C.yellow, Feature: C.violet, Bug: C.orange, Defect: C.magenta };
+const CONTAINER_TYPES = new Set(["Epic", "Feature"]);
 const typeColor = (type) => TYPE_COLOR[type] ?? "#7f8796";
 const S = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 
@@ -427,6 +428,66 @@ export default class Standup extends View {
         .when(list.length > 8, (el) => el.child(this.more(t, key, list.length))), this.clearChip(t, key, chip));
   }
 
+  // Working on: per person, their current item (the Active one changed most
+  // recently) and counts of everything else they hold that isn't done. Epics
+  // and Features are containers, not work in hand, so they're left out.
+  nowCard(t, m) {
+    const d = this.data;
+    const people = new Map();
+    for (const p of d.members ?? []) people.set(lc(p.mail), { name: p.name, mail: lc(p.mail), items: [] });
+    for (const w of m.items) {
+      if (w.category !== "InProgress" || !w.assigned?.mail || CONTAINER_TYPES.has(w.type)) continue;
+      const k = lc(w.assigned.mail);
+      const p = people.get(k) ?? { name: w.assigned.name, mail: k, items: [] };
+      p.items.push(w);
+      people.set(k, p);
+    }
+    const isActive = (w) => lc(w.state) === "active";
+    const rows = [...people.values()].filter((p) => this.is({ mail: p.mail })).map((p) => {
+      const active = p.items.filter(isActive).sort((a, b) => ms(b.changed) - ms(a.changed));
+      return { ...p, current: active[0] ?? null, rest: p.items.filter((w) => w !== active[0]) };
+    }).sort((a, b) => Number(!a.current) - Number(!b.current) || a.name.localeCompare(b.name));
+    const ORDER = ["Active", "Code Review", "Pending QA", "Blocked", "On-Hold", "Proposed"];
+    const rank = (s) => { const i = ORDER.findIndex((x) => lc(x) === lc(s)); return i < 0 ? ORDER.length : i; };
+    return this.card(t, "c-now", "Working on", rows.filter((r) => r.current).length + " of " + rows.length,
+      rows.length ? v_flex().gap(2).children(rows.map((p) => {
+        const id = p.mail.replace(/[^a-z0-9]/g, "");
+        const key = `now-${id}`;
+        const groups = new Map();
+        for (const w of p.rest) groups.set(w.state, [...(groups.get(w.state) ?? []), w]);
+        const states = [...groups.keys()].sort((a, b) => rank(a) - rank(b));
+        const picked = this.open[key];
+        const w = p.current;
+        const stale = w && ageDays(w.changed) >= STALE_DAYS;
+        const chips = h_flex().gap(4).flex_wrap().children(states.map((st) => {
+          const n = groups.get(st).length;
+          const label = lc(st) === "active" ? `+${n} active` : `${n} ${lc(st)}`;
+          const warn = lc(st) === "blocked" || lc(st) === "on-hold";
+          return div().id(`${key}-${st.replace(/\W/g, "")}`).px(6).py(1).rounded(5).cursor_pointer().text_size(11)
+            .text_color(picked === st ? t.foreground : warn ? S.serious : t.muted).bg(picked === st ? t.selected : t.surface)
+            .hover((s) => s.bg(t.hover)).tooltip(picked === st ? "Hide" : `Show ${p.name.split(/\s+/)[0]}'s ${lc(st)} items`)
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => { cx.stop_propagation(); this.open[key] = picked === st ? undefined : st; cx.notify(); })
+            .child(label);
+        }));
+        return v_flex()
+          .child(h_flex().gap(10).items_center()
+            .child(div().flex_none().w(130).truncate().text_size(12).text_color(w ? t.foreground : t.muted).child(p.name))
+            .child(div().flex_1().min_w(0).child(w
+              ? this.row(t, `now-${id}-cur`, {
+                title: w.title, sub: `#${w.id} · ${w.type}`,
+                right: `updated ${ago(w.changed)} ago`, rightColor: stale ? S.warning : t.muted,
+                lead: typeColor(w.type), url: w.url, tip: stale ? `No change in ${Math.floor(ageDays(w.changed))} days` : null,
+              })
+              : div().px(8).py(5).text_size(12).text_color(S.warning).child("No active item")))
+            .child(div().flex_none().w(280).child(chips)))
+          .when(Boolean(picked && groups.get(picked)), (el) => el.child(v_flex().pl(140).children((groups.get(picked) ?? [])
+            .sort((a, b) => ms(b.changed) - ms(a.changed))
+            .map((x) => this.row(t, `now-${id}-${x.id}`, { title: x.title, sub: `#${x.id} · ${x.type} · ${x.state}`,
+              right: ago(x.changed), lead: typeColor(x.type), url: x.url })))));
+      })) : this.empty(t, "No one on this team has open work."));
+  }
+
   more(t, key, n) {
     return div().id(`more-${key}`).px(8).py(4).text_size(11.5).text_color(t.accent).cursor_pointer()
       .on_click((_e, cx) => { this.open[key] = !this.open[key]; cx.notify(); })
@@ -612,6 +673,7 @@ export default class Standup extends View {
         .when(errs.length > 0, (el) => el.child(div().px(12).py(8).rounded(8).bg(S.critical + "22").text_size(12).text_color(t.foreground)
           .child(`Some data didn't load: ${errs.map(([k, v]) => `${k} (${v})`).join("; ")}`)))
         .child(this.tiles(t, m))
+        .child(this.nowCard(t, m))
         .child(h_flex().gap(12).items_start().child(this.completedCard(t, m)).child(this.reviewCard(t, m)))
         .child(h_flex().gap(12).items_start().child(this.impCard(t, m)).child(this.newCard(t, m)))
         .child(h_flex().gap(12).items_start().child(this.buildsCard(t, m)).child(this.deploysCard(t, m)))));

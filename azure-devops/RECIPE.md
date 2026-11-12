@@ -202,6 +202,18 @@ chip.
   card header names the filter, followed by an x; clicking it ("Clear the
   filter and show all") shows everything again. Clicking the same bar again
   also clears the filter. Filters are per card and reset when you switch teams.
+- **Working on** (full width, under the tiles): one row per team member, plus
+  anyone else holding open work in the team's area. A row has a 130px name,
+  then the person's current item: their Active item that changed most
+  recently, with its type-colored lead bar and "updated Nd ago". That text is
+  `#fab219` once the item has had no change for 3 or more days. Last come
+  chips for everything else they hold that isn't done ("+2 active",
+  "3 code review", "1 blocked"); blocked and on-hold chips are `#ec835a`.
+  Clicking a chip lists those items under the row, and clicking it again hides
+  them. A person with nothing Active shows "No active item" in `#fab219`.
+  People with a current item come first. Epics and Features are left out,
+  because they hold work rather than being work. The count chip reads
+  "N of M" people with a current item.
 - **PRs needing review**: oldest first. Each row has an age bar under it in
   `#9085e9`, or `#fab219` once the PR is 5 or more days old. Clicking a row
   opens the PR in the `ado-prs` review view as a dialog on top of the
