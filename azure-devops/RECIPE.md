@@ -212,7 +212,9 @@ chip.
 - **Impediments**: grouped as Failing main builds, Stuck PRs, Blocking tags and
   Stale in progress (3d+). It shows 6 per group, and each row's lead bar shows
   severity: `#d03b3b` critical, `#ec835a` serious, `#fab219` warning.
-- **New work**: bars by type in `#d95926`, then items.
+- **New work**: bars by type, then items, each in its type's color (bar and
+  row lead): User Story `#3987e5`, Technical Story `#199e70`, Task `#c98500`,
+  Feature `#9085e9`, Bug `#d95926`, Defect `#d55181`, any other type `#7f8796`.
 - **Build failures**: bars per pipeline (top 10, 170px labels): failed
   `#d03b3b`, partial `#ec835a`. A "PR builds N" pill in the card header includes
   PR validation runs. The card lists 6 runs, then "Show all".

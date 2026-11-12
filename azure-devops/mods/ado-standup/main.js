@@ -41,6 +41,9 @@ const ICON = (n) => `mods/ado-standup/${n}.svg`;
 // Dark-surface categorical slots and the reserved status steps (validated against
 // the catppuccin surface with the dataviz validator: all six checks pass).
 const C = { blue: "#3987e5", orange: "#d95926", aqua: "#199e70", yellow: "#c98500", magenta: "#d55181", violet: "#9085e9" };
+// New work's color per work item type, from the same six slots; other types are grey.
+const TYPE_COLOR = { "User Story": C.blue, "Technical Story": C.aqua, Task: C.yellow, Feature: C.violet, Bug: C.orange, Defect: C.magenta };
+const typeColor = (type) => TYPE_COLOR[type] ?? "#7f8796";
 const S = { good: "#0ca30c", warning: "#fab219", serious: "#ec835a", critical: "#d03b3b" };
 
 // ---- time
@@ -458,7 +461,7 @@ export default class Standup extends View {
     const f = this.focus[key] ?? {};
     const rows = [...by.entries()].sort((a, b) => b[1] - a[1]).map(([type, n]) => ({
       key: type.replace(/\W/g, ""), label: type, active: f.type === type, dim: Boolean(f.type) && f.type !== type,
-      segs: [{ n, color: C.orange, tip: `${n} ${type}` }],
+      segs: [{ n, color: typeColor(type), tip: `${n} ${type}` }],
       onClick: (_e, cx) => this.toggleFocus(key, { type }, cx),
     }));
     const list = f.type ? m.created.filter((w) => w.type === f.type) : m.created;
@@ -470,7 +473,7 @@ export default class Standup extends View {
         .when(Boolean(f.type) && list.length === 0, (el) => el.child(this.empty(t, "Nothing matches this filter.")))
         .child(v_flex().children(shown.map((w) => this.row(t, `nw-${w.id}`, {
           title: w.title, sub: `#${w.id} · ${w.type} · ${w.state} · by ${w.createdBy?.name ?? "?"}${w.assigned ? ` → ${first(w.assigned.name)}` : " · unassigned"}`,
-          right: ago(w.created), lead: C.orange, url: w.url,
+          right: ago(w.created), lead: typeColor(w.type), url: w.url,
         }))))
         .when(list.length > 8, (el) => el.child(this.more(t, key, list.length))), this.clearChip(t, key, f.type ?? ""));
   }
