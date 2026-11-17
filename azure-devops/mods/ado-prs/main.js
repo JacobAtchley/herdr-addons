@@ -147,7 +147,14 @@ export default class AdoPrs extends View {
         cx.notify();
       },
       notify: (msg) => notify({ title: "Pull request", body: msg, level: "error" }),
-      chrome: (t) => (props()?.overlay ? [this.iconButton(t, "rv-close", "mods/ado-prs/x.svg", "Close", () => this.dismiss())] : []),
+      // Header buttons after the view's own: Review with Claude Code (as on the
+      // list's rows), and Close when this is a dialog.
+      chrome: (t, pr) => [
+        pr ? this.iconButton(t, "rv-claude", "mods/ado-prs/review.svg", "Review with Claude Code", () => this.claudeReview({
+          id: pr.id, project: pr.project, repo: pr.repo, title: pr.title, source: pr.source, target: pr.target, author: pr.author?.name,
+        })) : null,
+        props()?.overlay ? this.iconButton(t, "rv-close", "mods/ado-prs/x.svg", "Close", () => this.dismiss()) : null,
+      ].filter(Boolean),
     };
   }
 

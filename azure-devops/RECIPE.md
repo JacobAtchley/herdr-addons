@@ -263,6 +263,8 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     10, 5, 0, -5 and -10. The current vote is highlighted. A refused write
     (a non-author toggling draft, a vote on a closed PR) shows the error and
     keeps the server's state.
+    Then Refresh, Open in browser, Review with Claude Code (the same
+    action as the list row's), and Close when it's a dialog.
   - Status strip: reviewer chips (vote, "required"), gate chips, and a
     "Work item #id" chip per linked item (title in the tooltip). A build
     gate opens that run in `ado-pipelines`, and a linked work item opens in
@@ -294,6 +296,7 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - **Review with Claude Code** opens a new tab named `Review !id` running
   `claude --model <model>` in `claude.folder`. Its task is to use the
   `reviewing-ado-open-prs` skill on just this PR. Then the dialog closes.
+  The PR review view's header has the same button.
 - **Copy Slack message** copies three lines: `*PR !id: title*`, then
   `` `repo` · `src` → `tgt` · by Author ``, then the URL. A 2s toast confirms
   the copy.

@@ -112,7 +112,7 @@ const DIALOG_SIZE = {
 
 export class Review {
   /**
-   * @param {{org: string, provider: import("./model.js").Provider, back(cx): void, backLabel?: string, notify(msg: string): void, chrome?(t): any[]}} host
+   * @param {{org: string, provider: import("./model.js").Provider, back(cx): void, backLabel?: string, notify(msg: string): void, chrome?(t, pr): any[]}} host
    * @param {{project: string, repoId: string, id: number}} ref
    */
   constructor(host, ref, cx) {
@@ -435,7 +435,7 @@ export class Review {
       .when(Boolean(pr && this.provider.capabilities.draft), (el) => el.child(this.draftToggle(t)))
       .child(iconButton(t, "rv-refresh", "refresh", "Refresh", (_e, cx) => this.load(cx), { spin: this.loading }))
       .when(Boolean(pr?.url), (el) => el.child(iconButton(t, "rv-open", "external", "Open in browser", () => this.browse(pr.url))))
-      .children(this.host.chrome?.(t) ?? []);
+      .children(this.host.chrome?.(t, pr) ?? []);
     let v = v_flex().flex_none().px(16).py(10).gap(6).border_b(1).border_color(t.border).child(row);
     if (pr) {
       v = v.child(h_flex().gap(10).items_center().flex_wrap()
