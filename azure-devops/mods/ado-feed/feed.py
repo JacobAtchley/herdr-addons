@@ -14,8 +14,11 @@ All times are stored as ISO-8601 UTC strings and compared only after parsing.
 Later tasks add the ADO fetchers and the CLI, which prints one JSON object
 after MARKER.
 """
+import argparse
+import copy
 import json
 import re
+import sys
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -101,8 +104,11 @@ def _out(r):
     return d
 
 
-def apply_sync(conn, observations, ok_kinds, now):
-    """Fold one sync's observations into the store. Returns {"new": [rows], "first": bool}."""
+def apply_sync(conn, observations, ok_kinds, now, notify=False):
+    """Fold one sync's observations into the store. Returns {"new": [rows], "first": bool}.
+
+    notify=True marks the returned new rows notified inside the same transaction,
+    so two concurrent notifying syncs can't both report a key."""
     now_s = iso(now)
     with _Tx(conn):
         first = _meta(conn, "baseline") is None
@@ -132,6 +138,8 @@ def apply_sync(conn, observations, ok_kinds, now):
             _set_meta(conn, "baseline", now_s)
         _set_meta(conn, "last_sync", now_s)
         new = [] if first else _new_rows(conn)
+        if notify and new:
+            conn.executemany("UPDATE items SET notified=1 WHERE key=?", [(r["key"],) for r in new])
     return {"new": new, "first": first}
 
 
@@ -378,3 +386,177 @@ def wi_observations(ado, who, now):
 
     with ThreadPoolExecutor(8) as pool:
         return [o for o in pool.map(one, live) if o]
+
+
+# ---- ADO writes and the CLI
+
+class FeedAdo(standup.Ado):
+    def put(self, url, body):
+        return self.call("PUT", url, body)
+
+    def patch(self, url, body):
+        c = copy.copy(self)  # own headers dict: the shared one stays application/json
+        c.headers = {**self.headers, "Content-Type": "application/json-patch+json"}
+        return c.call("PATCH", url, body)
+
+
+FATAL = "Set ado.standup.project and ado.feed.team or ado.standup.team in addons.json"
+
+
+def load_settings(home):
+    try:
+        with open(Path(home) / "addons.json") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = {}
+    ado = d.get("ado") if isinstance(d.get("ado"), dict) else {}
+    sd = ado.get("standup") if isinstance(ado.get("standup"), dict) else {}
+    fd = ado.get("feed") if isinstance(ado.get("feed"), dict) else {}
+    return {"project": sd.get("project"), "team": fd.get("team") or sd.get("team"), "org": ado.get("org")}
+
+
+def make_ado(settings):
+    az = standup.az_bin()
+    org = settings.get("org") or standup.default_org(az)
+    return FeedAdo(org, settings["project"], standup.token(az))
+
+
+def _err(e):
+    return str(e)[:400]
+
+
+def _fetch_all(ado, settings, now):
+    """Returns (observations, ok_kinds, errors)."""
+    errors, obs_, ok = {}, [], []
+    with ThreadPoolExecutor(4) as pool:
+        f_me = pool.submit(me, ado)
+        f_team = pool.submit(standup.team_info, ado, settings["team"])
+        f_build = pool.submit(build_observations, ado, now)
+        who = groups = None
+        try:
+            who = f_me.result()
+        except Exception as e:
+            errors["pr"] = errors["wi"] = _err(e)
+        try:
+            info = f_team.result()
+            groups = {(g or "").split("\\")[-1].lower() for g in info.get("groups") or []}
+            groups.add(settings["team"].lower())
+        except Exception as e:
+            errors["pr"] = _err(e)
+        jobs = {"build": f_build}
+        if who is not None and groups is not None:
+            jobs["pr"] = pool.submit(pr_observations, ado, who, groups, now)
+        if who is not None:
+            jobs["wi"] = pool.submit(wi_observations, ado, who, now)
+        for kind, fut in jobs.items():
+            try:
+                obs_ += fut.result()
+                ok.append(kind)
+            except Exception as e:
+                errors[kind] = _err(e)
+    return obs_, ok, errors
+
+
+def cmd_sync(conn, settings, args):
+    now = datetime.now(timezone.utc)
+    ado = make_ado(settings)
+    observations, ok, errors = _fetch_all(ado, settings, now)
+    r = apply_sync(conn, observations, ok, now, notify=args.notify)
+    return {"new": r["new"], "open": open_count(conn), "first": r["first"],
+            "summary": None if r["first"] else summary(r["new"]), "errors": errors,
+            "project": settings["project"], "team": settings["team"], "generated": iso(now)}
+
+
+def cmd_list(conn, settings, args):
+    now = datetime.now(timezone.utc)
+    return {"rows": list_rows(conn, args.window, args.resolved, now), "open": open_count(conn),
+            "last_sync": _meta(conn, "last_sync"), "project": settings["project"], "team": settings["team"]}
+
+
+def _get_row(conn, key):
+    r = conn.execute("SELECT * FROM items WHERE key=?", (key,)).fetchone()
+    return _out(r) if r else None
+
+
+def _act(ado, row):
+    ref, action = row["ref"], row["action"]
+    if action == "approve":
+        url = (f"/{q(ref['project'])}/_apis/git/repositories/{ref['repoId']}/pullRequests/{ref['id']}"
+               f"/reviewers/{me(ado)['id']}?api-version=7.1")
+        try:
+            vote = ado.get(url).get("vote", 0)
+        except RuntimeError as e:
+            if not str(e).startswith("HTTP 404"):
+                raise
+            vote = 0
+        if vote >= 5:
+            return "already approved"
+        ado.put(url, {"vote": 10})
+        return "approved"
+    if action == "close":
+        base = f"/_apis/wit/workitems/{ref['id']}"
+        f = ado.get(f"{base}?fields=System.State,System.WorkItemType&api-version=7.1").get("fields") or {}
+        state = f.get("System.State")
+        if state != "Pending QA":
+            return f"already {state}"
+        typ = f.get("System.WorkItemType") or ref.get("type")
+        cats = standup.state_categories(ado, [typ]).get(typ, {})
+        done = next((n for n, c in cats.items() if c == "Completed"), None)
+        if not done:
+            raise RuntimeError(f"No Completed state for {typ}")
+        ado.patch(f"{base}?api-version=7.1", [{"op": "add", "path": "/fields/System.State", "value": done}])
+        return "closed"
+    return None
+
+
+def cmd_resolve(conn, settings, args):
+    row = _get_row(conn, args.key)
+    if row is None:
+        return {"error": "No such item"}
+    try:
+        note = _act(make_ado(settings), row) if row["action"] in ("approve", "close") else None
+        set_resolved(conn, args.key, "me", note, datetime.now(timezone.utc))
+    except Exception as e:
+        return {"error": _err(e)}
+    return {"row": _get_row(conn, args.key)}
+
+
+def cmd_unresolve(conn, settings, args):
+    if _get_row(conn, args.key) is None:
+        return {"error": "No such item"}
+    set_unresolved(conn, args.key)
+    return {"row": _get_row(conn, args.key)}
+
+
+def run(argv):
+    ap = argparse.ArgumentParser(prog="feed.py")
+    ap.add_argument("--home", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("sync")
+    s.add_argument("--notify", action="store_true")
+    ls = sub.add_parser("list")
+    ls.add_argument("--window", choices=sorted(WINDOWS), default="24h")
+    ls.add_argument("--resolved", action="store_true")
+    for name in ("resolve", "unresolve"):
+        sub.add_parser(name).add_argument("key")
+    args = ap.parse_args(argv)
+    settings = load_settings(args.home)
+    if not settings["project"] or not settings["team"]:
+        return {"fatal": FATAL}
+    conn = connect(str(Path(args.home) / "ado-feed.db"))
+    try:
+        return {"sync": cmd_sync, "list": cmd_list, "resolve": cmd_resolve, "unresolve": cmd_unresolve}[args.cmd](conn, settings, args)
+    except Exception as e:
+        return {"error": _err(e)}
+    finally:
+        conn.close()
+
+
+def main(argv=None):
+    out = run(sys.argv[1:] if argv is None else argv)
+    print(MARKER)
+    print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    main()
