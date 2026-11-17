@@ -13,6 +13,8 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "mods", "ado-feed"))
 import feed  # noqa: E402
 
+REAL_PR = feed.pr_observations
+
 ME = {"id": "me-1", "name": "Lee Lead", "mail": "lee.lead@example.test"}
 SETTINGS = {"ado": {"org": "acme", "standup": {"project": "Proj", "team": "Core"}}}
 
@@ -25,8 +27,8 @@ def obs(key, kind="pr", action="none", ref=None, ev="2026-11-16T10:00:00.000Z"):
 class FakeAdo:
     org, project = "acme", "Proj"
 
-    def __init__(self, vote=0, state="Pending QA", fail_put=False):
-        self.vote, self.state, self.fail_put = vote, state, fail_put
+    def __init__(self, vote=0, state="Pending QA", fail_put=False, required=None):
+        self.vote, self.state, self.fail_put, self.required = vote, state, fail_put, required
         self.puts, self.patches, self.gets = [], [], []
 
     def get(self, url):
@@ -34,7 +36,10 @@ class FakeAdo:
         if "/reviewers/" in url:
             if self.vote is None:
                 raise RuntimeError("HTTP 404: not a reviewer")
-            return {"vote": self.vote}
+            d = {"vote": self.vote}
+            if self.required is not None:
+                d["isRequired"] = self.required
+            return d
         if "/workitems/" in url:
             return {"fields": {"System.State": self.state, "System.WorkItemType": "Bug"}}
         raise AssertionError(url)
@@ -119,6 +124,29 @@ class TestSync(CliBase):
         self.assertIn("timeout", out["errors"]["build"])
         self.assertEqual(out["open"], 1)
 
+    def test_group_lookup_failure_fails_pr_kind_and_keeps_rows(self):
+        self.pr = [obs("pr:repo-1:5")]
+        self.run_cmd("sync")
+        grp = {"id": "g-1", "displayName": "[Proj]\\Platform-Devs", "isContainer": True, "vote": 0}
+
+        class GroupAdo:
+            org, project = "acme", "Proj"
+
+            def get(self, url):
+                if "vssps" in url:
+                    raise RuntimeError("HTTP 500: identities")
+                if "/git/pullrequests?" in url:
+                    return {"value": [{"pullRequestId": 5, "title": "PR 5", "creationDate": "2026-11-16T10:00:00Z",
+                                       "createdBy": {"id": "au-1"}, "reviewers": [grp],
+                                       "repository": {"id": "repo-1", "name": "svc-a"}}]}
+                return {"value": []}
+
+        self.ado = GroupAdo()
+        with mock.patch.object(feed, "pr_observations", REAL_PR):
+            out = self.run_cmd("sync")
+        self.assertIn("identities", out["errors"]["pr"])
+        self.assertEqual(out["open"], 1)
+
     def test_concurrent_syncs_notify_once(self):
         self.run_cmd("sync")  # baseline
         self.pr = [obs("pr:r:9")]
@@ -166,10 +194,17 @@ class TestResolve(CliBase):
     def test_resolve_approve_puts_vote_when_unapproved(self):
         self.seed(self.pr_obs())
         out = self.run_cmd("resolve", "pr:repo1:7")
-        self.assertEqual(self.ado.puts, [("/Proj/_apis/git/repositories/repo1/pullRequests/7/reviewers/me-1?api-version=7.1", {"vote": 10})])
+        self.assertEqual(self.ado.puts, [("/Proj/_apis/git/repositories/repo1/pullRequests/7/reviewers/me-1?api-version=7.1",
+                                          {"vote": 10, "isRequired": False})])
         self.assertEqual(out["row"]["note"], "approved")
         self.assertEqual(out["row"]["resolved_by"], "me")
         self.assertIsNotNone(out["row"]["resolved_at"])
+
+    def test_resolve_approve_keeps_required_flag(self):
+        self.ado.required = True
+        self.seed(self.pr_obs())
+        self.run_cmd("resolve", "pr:repo1:7")
+        self.assertEqual(self.ado.puts[0][1], {"vote": 10, "isRequired": True})
 
     def test_resolve_approve_404_means_vote_zero(self):
         self.ado.vote = None

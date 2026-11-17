@@ -49,7 +49,8 @@ macOS traffic lights at (12, 16). Terminals get 14px x 12px padding.
       its chevron while the feed (`shared("ado.feed.count")`) has open items; its
       text is then `foreground`. my-tabs runs `ado-feed/feed.py sync --notify` at
       startup and every 3 minutes, posting one summary popup per sync (click opens
-      the Feed). Silent if ado-feed or ado-standup is missing or the sync fails.
+      the Feed). Silent if ado-feed or ado-standup is missing or the sync fails;
+      a failed sync keeps the last count.
     - Files and Usage are lit (`selected` fill, `foreground` text) while their panel
       or dialog is open.
     - Orchestrator: when approvals are waiting, its wand icon turns `done`, the label

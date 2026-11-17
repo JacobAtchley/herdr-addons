@@ -94,17 +94,22 @@ class GroupMatcherTests(unittest.TestCase):
         o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a", "b"]}]}})
         self.assertEqual(o, [])
 
-    def test_lookup_failure_falls_back_to_name(self):
+    def test_lookup_failure_raises(self):
+        # a failed lookup fails the whole pr kind; name matching never decides absence
         class Boom(FakeAdo):
             def get(self, url):
                 if "vssps" in url:
                     raise RuntimeError("HTTP 500")
                 return super().get(url)
         p = pr(reviewers=[self.grp()])
-        ado = Boom(pr_routes(p))
-        self.assertEqual(len(feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, {"platform-devs"}), NOW)), 1)
-        ado = Boom(pr_routes(p))
-        self.assertEqual(feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, set()), NOW), [])
+        for groups in ({"platform-devs"}, set()):
+            ado = Boom(pr_routes(p))
+            with self.assertRaises(RuntimeError):
+                feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, groups), NOW)
+
+    def test_name_match_is_an_additional_positive(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a"]}]}}, groups={"platform-devs"})
+        self.assertEqual(len(o), 1)
 
     def test_lookup_once_per_group_id(self):
         m_ado = FakeAdo({self.URL: {"value": [{"memberIds": ["me-1"]}]}})
@@ -173,6 +178,15 @@ class FetchPrTests(unittest.TestCase):
         other = reviewer(0, id="x-1", mail="x@example.test", name="Xi Other")
         grp = reviewer(0, id="g-2", mail="", group=True, name="[Proj]\\Other-Team")
         self.assertEqual(run_pr(pr(reviewers=[other, grp]), groups={"platform-devs"}), [])
+
+    def test_pr_own_pr_is_absent(self):
+        p = pr(reviewers=[reviewer(0)])
+        p["createdBy"] = {"id": "me-1", "displayName": "Lee Lead", "uniqueName": "lee.lead@example.test"}
+        self.assertEqual(run_pr(p), [])
+        grp = reviewer(0, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+        p = pr(reviewers=[grp])
+        p["createdBy"] = {"id": "x", "uniqueName": "LEE.LEAD@example.test"}
+        self.assertEqual(run_pr(p, groups={"platform-devs"}), [])
 
     def test_pr_draft_is_absent(self):
         self.assertEqual(run_pr(pr(reviewers=[reviewer(0)], draft=True)), [])
@@ -251,13 +265,13 @@ def wi(id, state="Active", typ="Bug"):
                                  "System.CreatedDate": ts(days=30), "System.CreatedBy": {"displayName": "Cy Creator"}}}
 
 
-def upd(when, new_id="me-1", by="Alex Doe", old=None, latest=False):
+def upd(when, new_id="me-1", by="Alex Doe", old=None, latest=False, by_id="a-1"):
     """Real API: revisedDate is the supersede time (9999-01-01 on the newest); the change time is in System.ChangedDate."""
     f = {"newValue": {"id": new_id, "uniqueName": "lee.lead@example.test" if new_id == "me-1" else "o@example.test"}}
     if old:
         f["oldValue"] = {"displayName": old}
     return {"revisedDate": "9999-01-01T00:00:00Z" if latest else feed.iso(feed.parse_time(when) + timedelta(hours=1)),
-            "revisedBy": {"displayName": by},
+            "revisedBy": {"id": by_id, "displayName": by},
             "fields": {"System.AssignedTo": f, "System.ChangedDate": {"newValue": when}}}
 
 
@@ -284,7 +298,10 @@ class FetchWorkItemTests(unittest.TestCase):
     def test_wi_latest_update_uses_changed_date(self):
         o = run_wi([wi(16)], {16: [upd(ts(days=1), latest=True)]})
         self.assertEqual(o[0]["event_at"], ts(days=1))
-        self.assertEqual(run_wi([wi(17)], {17: [upd(ts(days=20), latest=True)]}), [])
+        self.assertNotIn("appear", o[0])
+        o = run_wi([wi(17)], {17: [upd(ts(days=20), latest=True)]})
+        self.assertEqual(o[0]["event_at"], ts(days=20))
+        self.assertIs(o[0]["appear"], False)
 
     def test_wi_pending_qa_action_close(self):
         o = run_wi([wi(12, state="Pending QA")], {12: [upd(ts(days=1))]})
@@ -293,8 +310,27 @@ class FetchWorkItemTests(unittest.TestCase):
     def test_wi_completed_dropped(self):
         self.assertEqual(run_wi([wi(13, state="Closed")], {13: [upd(ts(days=1))]}), [])
 
-    def test_wi_old_assignment_dropped(self):
-        self.assertEqual(run_wi([wi(14)], {14: [upd(ts(days=20))]}), [])
+    def test_wi_old_assignment_still_observed_without_appear(self):
+        # still assigned: it stays (never auto-resolves) but is never newly inserted
+        o = run_wi([wi(14)], {14: [upd(ts(days=20))]})
+        self.assertEqual([x["key"] for x in o], ["wi:14"])
+        self.assertIs(o[0]["appear"], False)
+        it = wi(18)  # no assignment update: created long ago
+        o = run_wi([it], {18: []})
+        self.assertIs(o[0]["appear"], False)
+
+    def test_wi_query_has_no_changed_date_window(self):
+        ado = FakeAdo(wi_routes([wi(11)], {11: [upd(ts(days=1))]}))
+        feed.wi_observations(ado, ME, NOW)
+        q = next(c[2]["query"] for c in ado.calls if c[0] == "POST" and "/wit/wiql" in c[1])
+        self.assertNotIn("ChangedDate] >=", q)
+        self.assertIn("[System.AssignedTo] = @Me", q)
+
+    def test_wi_self_assigned_skipped(self):
+        self.assertEqual(run_wi([wi(19)], {19: [upd(ts(days=1), by="Lee Lead", by_id="me-1")]}), [])
+        # someone else's later reassignment back to him counts
+        o = run_wi([wi(20)], {20: [upd(ts(days=3), by="Lee Lead", by_id="me-1"), upd(ts(days=1))]})
+        self.assertEqual(len(o), 1)
 
     def test_wi_without_update_uses_created(self):
         it = wi(15)

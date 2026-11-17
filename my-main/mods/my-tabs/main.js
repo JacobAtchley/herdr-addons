@@ -44,7 +44,7 @@ export default class Tabs extends View {
 
   // ADO feed (mods/ado-feed): a background sync that announces new items once
   // (--notify) with one summary popup, and keeps the ADO button's count. Any
-  // failure (not installed, ado-standup missing, no marker, fatal) is silent.
+  // failure (not installed, ado-standup missing, no marker, fatal, error) is silent.
   pollFeed(cx) {
     if (this.feedBusy) return;
     this.feedBusy = true;
@@ -57,7 +57,8 @@ export default class Tabs extends View {
         const i = (out.stdout ?? "").indexOf("@@ADO-FEED@@");
         if (i < 0) return;
         const r = JSON.parse(out.stdout.slice(i + "@@ADO-FEED@@".length).trim());
-        if (!r || r.fatal) return;
+        // a failed run (fatal, error, no count) keeps the last count and posts nothing
+        if (!r || r.fatal || r.error || typeof r.open !== "number") return;
         setShared("ado.feed.count", r.open);
         if (r.summary) {
           notify({ title: r.summary.title, body: r.summary.body, level: "info", timeout: 15000, action: { name: "mod.open", args: { name: "ado-feed" } } });

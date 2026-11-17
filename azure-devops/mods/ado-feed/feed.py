@@ -4,11 +4,16 @@
 This section is the state engine: a SQLite store of observations (PRs to
 review, failed builds, newly assigned work items) and the rules that turn
 repeated syncs into "new", "resolved" and "reopened":
-  baseline   the first sync records everything as already notified (no popup)
-  new        an unseen key is open with notified = 0 until mark_notified
+  baseline   per kind (meta baseline:<kind>): a kind's first successful sync
+             records everything as already notified (no popup)
+  new        an unseen key is open with notified = 0 until mark_notified; an
+             observation with appear False is never inserted, only kept/updated
   resolve    a row missing from a sync is auto-resolved, but only for kinds whose
-             fetch succeeded (absence of data is not resolution)
-  reopen     a resolved row comes back when a later event appears
+             fetch succeeded (absence of data is not resolution), and never by a
+             sync older than the last one recorded
+  reopen     a manually resolved row comes back when a later event appears; an
+             auto-resolved row comes back whenever it is observed again (with a
+             popup only when its event is newer than the resolution)
   purge      resolved rows older than 30 days are deleted on each sync
 All times are stored as ISO-8601 UTC strings and compared only after parsing.
 Later tasks add the ADO fetchers and the CLI, which prints one JSON object
@@ -25,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 MARKER = "@@ADO-FEED@@"
 PURGE_DAYS = 30
 WINDOWS = {"24h": timedelta(hours=24), "48h": timedelta(hours=48), "1w": timedelta(days=7)}
+KINDS = ("pr", "build", "wi")
 LABELS = {"pr": ("PR to review", "PRs to review"),
           "build": ("failed build", "failed builds"),
           "wi": ("item assigned to you", "items assigned to you")}
@@ -111,32 +117,46 @@ def apply_sync(conn, observations, ok_kinds, now, notify=False):
     so two concurrent notifying syncs can't both report a key."""
     now_s = iso(now)
     with _Tx(conn):
-        first = _meta(conn, "baseline") is None
+        old = _meta(conn, "baseline")  # pre-per-kind databases: one key covered every kind
+        if old is not None:
+            for k in KINDS:
+                if _meta(conn, "baseline:" + k) is None:
+                    _set_meta(conn, "baseline:" + k, old)
+            conn.execute("DELETE FROM meta WHERE k='baseline'")
+        based = {k for k in KINDS if _meta(conn, "baseline:" + k) is not None}
+        first = any(k not in based for k in ok_kinds)
+        last = _meta(conn, "last_sync")
+        stale = last is not None and parse_time(last) > now
         seen = set()
         for o in observations:
             seen.add(o["key"])
             cur = conn.execute("SELECT * FROM items WHERE key=?", (o["key"],)).fetchone()
             if cur is None:
+                if o.get("appear", True) is False:
+                    continue
                 conn.execute("INSERT INTO items(key,kind,title,sub,url,ref,event_at,event_text,action,"
                              "first_seen,notified) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                             (o["key"], *_display(o), now_s, 1 if first else 0))
+                             (o["key"], *_display(o), now_s, 0 if o["kind"] in based else 1))
                 continue
-            reopen = (cur["resolved_at"] is not None and o.get("event_at") and cur["resolved_at"]
-                      and parse_time(o["event_at"]) > parse_time(cur["resolved_at"]))
+            newer = bool(cur["resolved_at"] and o.get("event_at")
+                         and parse_time(o["event_at"]) > parse_time(cur["resolved_at"]))
             sql = ("UPDATE items SET kind=?,title=?,sub=?,url=?,ref=?,event_at=?,event_text=?,action=?")
-            if reopen:
-                sql += ",resolved_at=NULL,resolved_by=NULL,note=NULL,notified=0"
+            if cur["resolved_at"] is not None and (newer or cur["resolved_by"] == "auto"):
+                sql += f",resolved_at=NULL,resolved_by=NULL,note=NULL,notified={0 if newer else 1}"
             conn.execute(sql + " WHERE key=?", (*_display(o), o["key"]))
-        for r in conn.execute("SELECT key,kind FROM items WHERE resolved_at IS NULL").fetchall():
-            if r["key"] not in seen and r["kind"] in ok_kinds:
-                conn.execute("UPDATE items SET resolved_at=?, resolved_by='auto' WHERE key=?", (now_s, r["key"]))
+        if not stale:  # a newer sync already ran: its view of what's gone wins
+            for r in conn.execute("SELECT key,kind FROM items WHERE resolved_at IS NULL").fetchall():
+                if r["key"] not in seen and r["kind"] in ok_kinds:
+                    conn.execute("UPDATE items SET resolved_at=?, resolved_by='auto' WHERE key=?", (now_s, r["key"]))
         cutoff = now - timedelta(days=PURGE_DAYS)
         for r in conn.execute("SELECT key,resolved_at FROM items WHERE resolved_at IS NOT NULL").fetchall():
             if parse_time(r["resolved_at"]) < cutoff:
                 conn.execute("DELETE FROM items WHERE key=?", (r["key"],))
-        if first:
-            _set_meta(conn, "baseline", now_s)
-        _set_meta(conn, "last_sync", now_s)
+        for k in ok_kinds:
+            if k not in based:
+                _set_meta(conn, "baseline:" + k, now_s)
+        if not stale:
+            _set_meta(conn, "last_sync", now_s)
         new = [] if first else _new_rows(conn)
         if notify and new:
             conn.executemany("UPDATE items SET notified=1 WHERE key=?", [(r["key"],) for r in new])
@@ -159,7 +179,10 @@ def list_rows(conn, window, resolved, now):
         ev = parse_time(r["event_at"]) if r["event_at"] else None
         inside = lambda t: t is not None and now - t <= span
         if r["resolved_at"] is None:
-            show = window == "1w" or inside(ev)
+            # an open row is "in" the window from when it happened or when the feed
+            # first saw it (e.g. added as a reviewer on an old PR), whichever is later
+            seen_at = parse_time(r["first_seen"]) if r["first_seen"] else None
+            show = window == "1w" or inside(max((t for t in (ev, seen_at) if t), default=None))
         else:
             show = resolved and (inside(ev) or inside(parse_time(r["resolved_at"])))
         if show:
@@ -257,7 +280,8 @@ def _pr_detail(ado, who, p):
 def group_matcher(ado, who, groups):
     """is_mine_group(reviewer): he is a direct member of the group (identities lookup,
     cached per group id for this matcher's life), or its lowercased last `\\` segment is
-    in `groups` (the fallback, also used when the lookup fails)."""
+    in `groups` (an additional positive only). A failed lookup raises, failing the
+    whole pr kind: name matching never decides that he is absent."""
     import threading
     cache, lock = {}, threading.Lock()
 
@@ -268,21 +292,16 @@ def group_matcher(ado, who, groups):
         with lock:
             if gid in cache:
                 return cache[gid]
-        try:
-            r = ado.get(f"https://vssps.dev.azure.com/{ado.org}/_apis/identities?identityIds={gid}"
-                        "&queryMembership=Direct&api-version=7.1")
-            val = who["id"] in ((r.get("value") or [{}])[0].get("memberIds") or [])
-        except Exception:
-            val = None
+        r = ado.get(f"https://vssps.dev.azure.com/{ado.org}/_apis/identities?identityIds={gid}"
+                    "&queryMembership=Direct&api-version=7.1")
+        val = who["id"] in ((r.get("value") or [{}])[0].get("memberIds") or [])
         with lock:
             cache[gid] = val
         return val
 
     def is_mine_group(r):
         if r.get("id") and who.get("id"):
-            d = direct(r["id"])
-            if d is not None:
-                return d or by_name(r)
+            return direct(r["id"]) or by_name(r)
         return by_name(r)
     return is_mine_group
 
@@ -292,7 +311,7 @@ def pr_observations(ado, who, is_mine_group, now):
     r = ado.get(f"/{q(ado.project)}/_apis/git/pullrequests?searchCriteria.status=active&$top=1000&api-version=7.1")
     cands = []
     for p in r.get("value", []):
-        if p.get("isDraft"):
+        if p.get("isDraft") or _is_me(p.get("createdBy"), who):
             continue
         revs = p.get("reviewers") or []
         personal = next((x for x in revs if not x.get("isContainer") and _is_me(x, who)), None)
@@ -378,7 +397,12 @@ def _assigned_at(u):
 
 
 def wi_observations(ado, who, now):
-    ids = standup.wiql(ado, f"[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-{WI_ASSIGNED_DAYS}")
+    """Every live item assigned to him. One assigned more than WI_ASSIGNED_DAYS ago is
+    observed with appear False (kept while assigned, never newly added); one he
+    assigned to himself is skipped."""
+    # the state-name filter only trims volume (closed history); state categories decide
+    ids = standup.wiql(ado, "[System.AssignedTo] = @Me AND [System.State] NOT IN ('Closed','Done','Removed')"
+                            " ORDER BY [System.ChangedDate] DESC")
     items = []
     for i in range(0, len(ids), 200):
         items += ado.post("/_apis/wit/workitemsbatch?api-version=7.1", {"ids": ids[i:i + 200], "fields": [
@@ -395,6 +419,8 @@ def wi_observations(ado, who, now):
         mine = [u for u in ups if _is_me(((u.get("fields") or {}).get("System.AssignedTo") or {}).get("newValue"), who)]
         if mine:
             u = max(mine, key=_assigned_at)
+            if _is_me(u.get("revisedBy"), who):
+                return None
             # revisedDate is when the revision was superseded (9999-01-01 on the newest);
             # the real change time is fields["System.ChangedDate"].newValue
             at = ((u.get("fields") or {}).get("System.ChangedDate") or {}).get("newValue")
@@ -407,15 +433,18 @@ def wi_observations(ado, who, now):
         else:
             at = f.get("System.CreatedDate")
             text = f"created by {(f.get('System.CreatedBy') or {}).get('displayName')}"
-        if not at or parse_time(at) < cutoff:
+        if not at:
             return None
         typ, state = f.get("System.WorkItemType"), f.get("System.State")
-        return {"key": f"wi:{w['id']}", "kind": "wi", "title": f.get("System.Title"),
-                "sub": f"#{w['id']} · {typ} · {state}",
-                "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_workitems/edit/{w['id']}",
-                "ref": {"project": ado.project, "id": w["id"], "state": state, "type": typ},
-                "event_at": iso(parse_time(at)), "event_text": text,
-                "action": "close" if state == "Pending QA" else "none"}
+        o = {"key": f"wi:{w['id']}", "kind": "wi", "title": f.get("System.Title"),
+             "sub": f"#{w['id']} · {typ} · {state}",
+             "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_workitems/edit/{w['id']}",
+             "ref": {"project": ado.project, "id": w["id"], "state": state, "type": typ},
+             "event_at": iso(parse_time(at)), "event_text": text,
+             "action": "close" if state == "Pending QA" else "none"}
+        if parse_time(at) < cutoff:
+            o["appear"] = False
+        return o
 
     with ThreadPoolExecutor(8) as pool:
         return [o for o in pool.map(one, live) if o]
@@ -520,14 +549,15 @@ def _act(ado, row):
         url = (f"/{q(ref['project'])}/_apis/git/repositories/{ref['repoId']}/pullRequests/{ref['id']}"
                f"/reviewers/{my_id}?api-version=7.1")
         try:
-            vote = ado.get(url).get("vote", 0)
+            cur = ado.get(url) or {}
         except RuntimeError as e:
             if not str(e).startswith("HTTP 404"):
                 raise
-            vote = 0
-        if vote >= 5:
+            cur = {}
+        if cur.get("vote", 0) >= 5:
             return "already approved"
-        ado.put(url, {"vote": 10})
+        # send isRequired back: a PUT without it would make a required reviewer optional
+        ado.put(url, {"vote": 10, "isRequired": bool(cur.get("isRequired", False))})
         return "approved"
     if action == "close":
         base = f"/_apis/wit/workitems/{ref['id']}"

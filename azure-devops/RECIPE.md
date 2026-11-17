@@ -252,11 +252,13 @@ red-tinted banner says which kind didn't load.
 
 | Kind | Appears when | Reappears when | Auto-resolves when |
 |---|---|---|---|
-| PR | Active, not a draft, no approval yet from you or your team's group, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team | A push or a comment by someone else, later than your vote or resolution | You voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
-| Build | A failed or partially succeeded run on a team pipeline in the last 14 days (`BUILD_DAYS`), one item per pipeline + branch ("failed 3x, latest 10m ago") | A newer failed run on that pipeline + branch | A newer successful run on that pipeline + branch |
-| Work item | Assigned to you within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate` | Assigned to you again after being resolved | No longer assigned to you, or Completed/Removed |
+| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | You voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
+| Build | A failed or partially succeeded run on any pipeline in the project in the last 14 days (`BUILD_DAYS`, up to 5000 runs per fetch), one item per pipeline + branch ("failed 3x, latest 10m ago"). Narrowing this to the team's repos is a possible change | A newer failed run on that pipeline + branch | A newer successful run on that pipeline + branch |
+| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment | Assigned to you again after being resolved | No longer assigned to you, or Completed/Removed |
 
-- **Windows:** 24 and 48 hours show items whose event time falls in the window.
+- **Windows:** 24 and 48 hours show items whose event time falls in the window;
+  an unresolved item also shows from when the feed first saw it (for example
+  when you are added as a reviewer on an older PR). Rows sort by event time.
   1 week shows every unresolved item, however old, plus anything from the last
   week. Show resolved adds resolved ones in the same window.
 - **Resolve actions:** the database changes only after ADO confirms. A PR
@@ -265,11 +267,17 @@ red-tinted banner says which kind didn't load.
   Builds and other work items change nothing in ADO. A failed call shows an
   error and leaves the row open. Resolved rows are dimmed, and their toggle
   reopens them (`unresolve`, database only: a vote or closed state stays).
-- **A kind whose fetch fails** never auto-resolves its rows.
+- **A kind whose fetch fails** never auto-resolves its rows, and a sync that
+  finishes after a newer one has recorded never auto-resolves anything.
+- **Auto-resolved items reopen** whenever they are found again; there is a
+  popup only when their event is newer than the auto-resolution. Items you
+  resolved yourself reopen only on a newer event.
 - **Database:** `<herdr home>/ado-feed.db` (SQLite). Resolved rows are deleted
   after 30 days.
 - **Notifying:** my-tabs runs `feed.py sync --notify` every 3 min. The first
-  sync is silent: everything found is shown and counted, with no popup. After
+  successful sync of each kind (PRs, builds, work items) is silent: everything
+  found is shown and counted, with no popup. A kind that failed on the first
+  sync stays silent until its own first success. After
   that each item gets at most one popup ("3 new in ADO", "2 PRs to review ·
   1 failed build"), and the ADO button shows a count of unresolved items. The
   open Feed syncs when it opens and every 2 min, without notifying.
@@ -503,7 +511,9 @@ red-tinted banner says which kind didn't load.
   - `feed.py` is standard library only. It loads `ado-standup/standup.py` by
     path for the `Ado` client, token and team lookup. Keys are
     `pr:<repoId>:<id>`, `build:<definitionId>:<branch>` and `wi:<id>`. Syncs
-    take `BEGIN IMMEDIATE` with a busy timeout, so two never interleave.
+    take `BEGIN IMMEDIATE` with a busy timeout, so two never interleave. The
+    `meta` table keeps `baseline:pr`, `baseline:build`, `baseline:wi` and
+    `last_sync` (an older single `baseline` key is migrated to all three).
     Tests: `python3 -m unittest discover -s azure-devops/tests/ado-feed`.
   - my-tabs does the background poll and the count badge (see my-main).
   - Art: `feed`, `check`, `check-filled`, `refresh`, `panel-right`, `x`.
