@@ -179,3 +179,190 @@ def summary(new):
         if n:
             parts.append(f"{n} {LABELS[kind][0 if n == 1 else 1]}")
     return {"title": f"{len(new)} new in ADO", "body": " · ".join(parts)}
+
+
+# ---- fetchers (ADO REST -> observations). Read-only: nothing here writes to ADO.
+# Assumptions about response shapes (documented, not verified against every org):
+#  - connectionData.authenticatedUser carries id, providerDisplayName and
+#    properties.Account.$value (the sign-in address).
+#  - Thread comments carry author.id and publishedDate; VoteUpdate threads carry
+#    properties.CodeReviewThreadType / CodeReviewVotedByIdentity as {"$value": ...}.
+#  - Work item updates carry revisedDate, revisedBy and fields["System.AssignedTo"]
+#    with identity-valued newValue / oldValue (id and uniqueName).
+import importlib.util
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "ado_standup", Path(__file__).resolve().parent.parent / "ado-standup" / "standup.py")
+standup = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(standup)
+q = standup.q
+
+BUILD_DAYS = 14
+WI_ASSIGNED_DAYS = 14
+
+
+def me(ado):
+    u = (ado.get("/_apis/connectionData?api-version=7.1-preview.1") or {}).get("authenticatedUser") or {}
+    mail = ((u.get("properties") or {}).get("Account") or {}).get("$value") or ""
+    return {"id": u.get("id"), "name": u.get("providerDisplayName"), "mail": mail.lower()}
+
+
+def _is_me(ident, who):
+    ident = ident or {}
+    if ident.get("id") and ident.get("id") == who["id"]:
+        return True
+    mail = (ident.get("uniqueName") or "").lower()
+    return bool(mail) and mail == who["mail"]
+
+
+def _latest(times):
+    times = [t for t in times if t]
+    return max(times, key=parse_time) if times else None
+
+
+def _pr_detail(ado, who, p):
+    base = f"/{q(ado.project)}/_apis/git/repositories/{p['repository']['id']}/pullRequests/{p['pullRequestId']}"
+    its = ado.get(f"{base}/iterations?api-version=7.1").get("value", [])
+    threads = ado.get(f"{base}/threads?api-version=7.1").get("value", [])
+    push = max(its, key=lambda i: parse_time(i["createdDate"])) if its else None
+    comment, vote_at = None, []
+    for t in threads:
+        props = t.get("properties") or {}
+        if (props.get("CodeReviewThreadType") or {}).get("$value") == "VoteUpdate":
+            if (props.get("CodeReviewVotedByIdentity") or {}).get("$value") == who["id"]:
+                vote_at += [c.get("publishedDate") for c in t.get("comments") or []] or [t.get("publishedDate")]
+            continue
+        for c in t.get("comments") or []:
+            a = c.get("author") or {}
+            if c.get("commentType") == "system" or a.get("id") == who["id"] or not c.get("publishedDate"):
+                continue
+            if comment is None or parse_time(c["publishedDate"]) > parse_time(comment["publishedDate"]):
+                comment = c
+    return push, comment, _latest(vote_at)
+
+
+def pr_observations(ado, who, groups, now):
+    """groups: lowercased last `\\` segments of the reviewer groups he's in."""
+    r = ado.get(f"/{q(ado.project)}/_apis/git/pullrequests?searchCriteria.status=active&$top=1000&api-version=7.1")
+    cands = []
+    for p in r.get("value", []):
+        if p.get("isDraft"):
+            continue
+        revs = p.get("reviewers") or []
+        personal = next((x for x in revs if not x.get("isContainer") and _is_me(x, who)), None)
+        mine = [x for x in revs if x.get("isContainer") and (x.get("displayName") or "").split("\\")[-1].lower() in groups]
+        if personal or mine:
+            cands.append((p, personal, mine))
+
+    def one(c):
+        p, personal, mine = c
+        push, comment, vote_at = _pr_detail(ado, who, p)
+        vote = (personal or {}).get("vote", 0)
+        push_at = push["createdDate"] if push else None
+        comment_at = comment["publishedDate"] if comment else None
+        if personal:
+            needs = vote == 0
+        else:  # on it only through a group: a group approval clears it
+            needs = not any(x.get("vote", 0) >= 5 for x in mine)
+        if not needs and vote != 0:
+            act = _latest([push_at, comment_at])
+            needs = bool(act) and (vote_at is None or parse_time(act) > parse_time(vote_at))
+        if not needs:
+            return None
+        author = (p.get("createdBy") or {}).get("displayName")
+        # on a tie the later-listed source wins: comment > push > opened
+        events = [(p["creationDate"], f"opened by {author}"),
+                  (push_at, f"{(push or {}).get('author', {}).get('displayName')} pushed"),
+                  (comment_at, f"{((comment or {}).get('author') or {}).get('displayName')} commented")]
+        best = max((e for e in events if e[0]), key=lambda e: parse_time(e[0]))
+        for e in events:
+            if e[0] and parse_time(e[0]) == parse_time(best[0]):
+                best = e
+        repo = p["repository"]
+        return {"key": f"pr:{repo['id']}:{p['pullRequestId']}", "kind": "pr", "title": p.get("title"),
+                "sub": f"!{p['pullRequestId']} · {repo.get('name')} · {author}",
+                "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_git/{q(repo.get('name') or '')}/pullrequest/{p['pullRequestId']}",
+                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"], "vote": vote},
+                "event_at": iso(parse_time(best[0])), "event_text": best[1],
+                "action": "approve" if vote < 5 else "none"}
+
+    with ThreadPoolExecutor(8) as pool:
+        return [o for o in pool.map(one, cands) if o]
+
+
+def build_observations(ado, now):
+    since = (now - timedelta(days=BUILD_DAYS)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    runs = ado.get(f"/{q(ado.project)}/_apis/build/builds?minTime={since}&statusFilter=completed"
+                   "&queryOrder=finishTimeDescending&$top=5000&api-version=7.1").get("value", [])
+    groups = {}
+    for b in runs:
+        if not b.get("finishTime"):
+            continue
+        k = ((b.get("definition") or {}).get("id"), (b.get("sourceBranch") or "").replace("refs/heads/", ""))
+        groups.setdefault(k, []).append(b)
+    out = []
+    for (defid, branch), g in groups.items():
+        g.sort(key=lambda b: parse_time(b["finishTime"]), reverse=True)
+        if g[0].get("result") == "succeeded":
+            continue
+        fails = []
+        for b in g:
+            if b.get("result") == "succeeded":
+                break
+            if b.get("result") in ("failed", "partiallySucceeded"):
+                fails.append(b)
+        if not fails:
+            continue
+        n = fails[0]
+        sub = f"#{n.get('buildNumber')} · {(n.get('requestedFor') or {}).get('displayName')}"
+        if n.get("reason") == "pullRequest":
+            sub += " · PR build"
+        out.append({"key": f"build:{defid}:{branch}", "kind": "build",
+                    "title": f"{(n.get('definition') or {}).get('name')} on {branch}",
+                    "sub": sub, "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_build/results?buildId={n['id']}",
+                    "ref": {"project": ado.project, "build": n["id"]},
+                    "event_at": iso(parse_time(n["finishTime"])),
+                    "event_text": f"failed {len(fails)}×" if len(fails) > 1 else "failed", "action": "none"})
+    return out
+
+
+def wi_observations(ado, who, now):
+    ids = standup.wiql(ado, f"[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-{WI_ASSIGNED_DAYS}")
+    items = []
+    for i in range(0, len(ids), 200):
+        items += ado.post("/_apis/wit/workitemsbatch?api-version=7.1", {"ids": ids[i:i + 200], "fields": [
+            "System.Title", "System.WorkItemType", "System.State", "System.AssignedTo",
+            "System.CreatedDate", "System.CreatedBy"]}).get("value", [])
+    cats = standup.state_categories(ado, sorted({(w["fields"].get("System.WorkItemType")) for w in items} - {None}))
+    live = [w for w in items if cats.get(w["fields"].get("System.WorkItemType"), {}).get(w["fields"].get("System.State"))
+            not in ("Completed", "Removed")]
+    cutoff = now - timedelta(days=WI_ASSIGNED_DAYS)
+
+    def one(w):
+        f = w["fields"]
+        ups = ado.get(f"/_apis/wit/workItems/{w['id']}/updates?api-version=7.1").get("value", [])
+        mine = [u for u in ups if _is_me(((u.get("fields") or {}).get("System.AssignedTo") or {}).get("newValue"), who)]
+        if mine:
+            u = max(mine, key=lambda u: parse_time(u["revisedDate"]))
+            at = u["revisedDate"]
+            text = f"assigned by {(u.get('revisedBy') or {}).get('displayName')}"
+            old = (u["fields"]["System.AssignedTo"].get("oldValue") or {}).get("displayName")
+            if old:
+                text += f", was {old}"
+        else:
+            at = f.get("System.CreatedDate")
+            text = f"created by {(f.get('System.CreatedBy') or {}).get('displayName')}"
+        if not at or parse_time(at) < cutoff:
+            return None
+        typ, state = f.get("System.WorkItemType"), f.get("System.State")
+        return {"key": f"wi:{w['id']}", "kind": "wi", "title": f.get("System.Title"),
+                "sub": f"#{w['id']} · {typ} · {state}",
+                "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_workitems/edit/{w['id']}",
+                "ref": {"project": ado.project, "id": w["id"], "state": state, "type": typ},
+                "event_at": iso(parse_time(at)), "event_text": text,
+                "action": "close" if state == "Pending QA" else "none"}
+
+    with ThreadPoolExecutor(8) as pool:
+        return [o for o in pool.map(one, live) if o]
