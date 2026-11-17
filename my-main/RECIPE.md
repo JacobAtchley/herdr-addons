@@ -45,6 +45,11 @@ macOS traffic lights at (12, 16). Terminals get 14px x 12px padding.
     8px side padding, 5px gap, 6px corners, 12px text in `muted` on `chrome`, a 14px
     icon before the label and an 11px chevron after it (Usage has no chevron).
     Hover fills `hover`.
+    - ADO also shows a count pill (`done` fill, `background` text, 10.5px) before
+      its chevron while the feed (`shared("ado.feed.count")`) has open items; its
+      text is then `foreground`. my-tabs runs `ado-feed/feed.py sync --notify` at
+      startup and every 3 minutes, posting one summary popup per sync (click opens
+      the Feed). Silent if ado-feed or ado-standup is missing or the sync fails.
     - Files and Usage are lit (`selected` fill, `foreground` text) while their panel
       or dialog is open.
     - Orchestrator: when approvals are waiting, its wand icon turns `done`, the label
@@ -87,7 +92,7 @@ in 12.5px `foreground` over a line in 11px `dim`, and the bound key on the right
   space's last panel (or closes it if that space never had one recorded); opening or
   closing it records the choice in localStorage `panels`. For 1 second after a
   restore, the old state isn't recorded as a choice.
-- **Dropdowns** open as popups: Tools (300 x 168), ADO `ado-menu` (300 x 218),
+- **Dropdowns** open as popups: Tools (300 x 168), ADO `ado-menu` (300 x 270),
   Orchestrator `orch-menu` (300 x 218), Datadog `dd-menu` (300 x 62). Picking a Tools
   row closes the popup and opens that mod.
 - **Usage** opens or closes the `cc-usage` dialog. Tooltip: "Claude usage (⌘⇧U)".
