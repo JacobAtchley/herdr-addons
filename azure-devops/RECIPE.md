@@ -1,20 +1,22 @@
 # Azure DevOps
 
 Your Azure DevOps day without a browser. An "ADO" button in the tab bar drops
-down four tools, each also on a key: every active pull request in the
+down five tools, each also on a key: every active pull request in the
 organization with its votes and open comments; recent pipeline runs across all
 projects with a live, colored log viewer; your work items, with a details view
 you can edit and save; and a one-screen team standup (completed work, PRs
-needing review, impediments, failed builds, production deploys). Everything
+needing review, impediments, failed builds, production deploys); and a feed of
+what needs a team lead now (PRs to review, failed builds, newly assigned work
+items), with a popup and a count on the ADO button. Everything
 signs in through the `az` CLI login, and nothing needs a token.
 
 ![Azure DevOps](preview.png)
 
 ## What you see
 
-**The ADO menu** (`ado-menu`) is a 300 x 218px popup. It opens from an "ADO"
+**The ADO menu** (`ado-menu`) is a 300 x 270px popup. It opens from an "ADO"
 button in the tab bar: 26px high, `chrome` background, `muted` 12px text, the
-Azure DevOps logo at 14px and a 11px chevron. The popup lists four rows, each
+Azure DevOps logo at 14px and a 11px chevron. The popup lists five rows, each
 52px tall with 5px padding around the list: a 15px icon in `muted`, a title in
 12.5px `foreground`, a one-line description in 11px `dim`, and the row's key on
 the right in 11px `dim` (from keys.json, drawn as glyphs like `⌘⇧R`). Rows go
@@ -26,8 +28,9 @@ the right in 11px `dim` (from keys.json, drawn as glyphs like `⌘⇧R`). Rows g
 | Pipelines | Recent runs and their logs | `cmd-shift-b` |
 | Work items | Assigned to me, last 30 days | `cmd-shift-i` |
 | Standup | Team's completed work, reviews, blockers, deploys | `cmd-shift-y` |
+| Feed | What needs your attention | `cmd-shift-f` |
 
-The four tools share one look. Each one is a dialog on `surface`. A header row
+The five tools share one look. Each one is a dialog on `surface`. A header row
 has 16px side padding, 10px vertical padding and a 1px `border` below. From left
 to right it holds:
 
@@ -236,6 +239,49 @@ chip.
 
 If some sections fail, a red-tinted banner says "Some data didn't load: …".
 
+**Feed** (`ado-feed`) is a dialog of 80% x 80% listing what needs the team
+lead, newest first. Header: icon and "Feed" with `project · team`, time pills
+(24 hours, 48 hours, 1 week), a "Show resolved" toggle, "updated Nm ago",
+refresh, dock as pane and close. Each row has a lead bar by kind, the title, a
+sub-line saying what happened, the time ago, and a round check toggle on the
+right whose tooltip names the action. Clicking a row opens the item as a stacked
+dialog: a PR in the `ado-prs` review (`returnTo: "Feed"`), a build's latest
+failed run in `ado-pipelines`, a work item in the `ado-workitems` detail. The
+team is `ado.feed.team`, else `ado.standup.team`, in `ado.standup.project`. A
+red-tinted banner says which kind didn't load.
+
+| Kind | Appears when | Reappears when | Auto-resolves when |
+|---|---|---|---|
+| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | You voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
+| Build | A failed or partially succeeded run on any pipeline in the project in the last 14 days (`BUILD_DAYS`, up to 5000 runs per fetch), one item per pipeline + branch ("failed 3x, latest 10m ago"). Narrowing this to the team's repos is a possible change | A newer failed run on that pipeline + branch | A newer successful run on that pipeline + branch |
+| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment | Assigned to you again after being resolved | No longer assigned to you, or Completed/Removed |
+
+- **Windows:** 24 and 48 hours show items whose event time falls in the window;
+  an unresolved item also shows from when the feed first saw it (for example
+  when you are added as a reviewer on an older PR). Rows sort by event time.
+  1 week shows every unresolved item, however old, plus anything from the last
+  week. Show resolved adds resolved ones in the same window.
+- **Resolve actions:** the database changes only after ADO confirms. A PR
+  below vote 5 gets your approve (10), and an existing 5 or 10 is left alone. A
+  work item in Pending QA is set to its type's Completed state, normally Closed.
+  Builds and other work items change nothing in ADO. A failed call shows an
+  error and leaves the row open. Resolved rows are dimmed, and their toggle
+  reopens them (`unresolve`, database only: a vote or closed state stays).
+- **A kind whose fetch fails** never auto-resolves its rows, and a sync that
+  finishes after a newer one has recorded never auto-resolves anything.
+- **Auto-resolved items reopen** whenever they are found again; there is a
+  popup only when their event is newer than the auto-resolution. Items you
+  resolved yourself reopen only on a newer event.
+- **Database:** `<herdr home>/ado-feed.db` (SQLite). Resolved rows are deleted
+  after 30 days.
+- **Notifying:** my-tabs runs `feed.py sync --notify` every 3 min. The first
+  successful sync of each kind (PRs, builds, work items) is silent: everything
+  found is shown and counted, with no popup. A kind that failed on the first
+  sync stays silent until its own first success. After
+  that each item gets at most one popup ("3 new in ADO", "2 PRs to review ·
+  1 failed build"), and the ADO button shows a count of unresolved items. The
+  open Feed syncs when it opens and every 2 min, without notifying.
+
 ## How it behaves
 
 - **Opening.** The ADO button opens the menu popup. Picking a row closes the
@@ -345,11 +391,13 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     over 2 min old, and never while a detail is open
   - Work items: every 2 min. A scope you switch back to reloads if stale.
   - Standup: every 5 min
+  - Feed: a sync on open, then every 2 min; my-tabs syncs every 3 min
 - **Remembered** in each mod's `localStorage`:
   - PRs and pipelines: the filter
   - Work items: the scope, the age rule (created or updated) and the Closed
     toggle
   - Standup: the team and the window
+  - Feed: the time window and Show resolved
 
   Folded groups, search text and the person filter last only for the session.
 
@@ -357,15 +405,16 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 
 - **`keys.json`**, section `global`: `cmd-shift-r` `mod.open:ado-prs`,
   `cmd-shift-b` `mod.open:ado-pipelines`, `cmd-shift-i`
-  `mod.open:ado-workitems`, `cmd-shift-y` `mod.open:ado-standup`.
+  `mod.open:ado-workitems`, `cmd-shift-y` `mod.open:ado-standup`,
+  `cmd-shift-f` `mod.open:ado-feed`.
 - **`mods/ado-menu/`**: `mod.json`
-  `{"place":"none","title":"Azure DevOps","overlay":{"kind":"popup","width":300,"height":218}}`.
+  `{"place":"none","title":"Azure DevOps","overlay":{"kind":"popup","width":300,"height":270}}`.
   `main.js` exports `ITEMS`. It uses `props().overlay`, `closeOverlay`,
   `run("mod.open", {name})`, `keys()` (for the hints) and `theme()`. Art:
   `ado.svg` (the logo, `currentColor`), `pr.svg`, `rocket.svg`,
   `workitems.svg`, `standup.svg`. The tab-bar button lives in another mod (the
   my-main addon's `my-tabs`). It calls
-  `openOverlay({mod: "ado-menu", kind: "popup", width: 300, height: 218})`.
+  `openOverlay({mod: "ado-menu", kind: "popup", width: 300, height: 270})`.
 - **`mods/ado-prs/`**: `mod.json`
   `{"place":"none","title":"Pull requests","overlay":{"kind":"dialog","width":0.8,"height":0.8}}`.
   - It makes one org-level call:
@@ -456,6 +505,21 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
   - A section that fails lands in `errors`, and the rest still show.
   - The colors are fixed hex (listed above), not theme names.
   - Art: `standup`, `refresh`, `external`, `panel-right`, `x`, `chev-*`.
+- **`mods/ado-feed/`**: `mod.json`
+  `{"place":"none","title":"Feed","overlay":{"kind":"dialog","width":0.8,"height":0.8}}`.
+  - `main.js` runs `python3 -I <appHome>/mods/ado-feed/feed.py <command>` and
+    parses the JSON after the marker line. Commands: `sync [--notify]`,
+    `list --window 24h|48h|1w [--resolved]`, `resolve <key>`, `unresolve <key>`.
+    It shares the open count as `ado.feed.count`.
+  - `feed.py` is standard library only. It loads `ado-standup/standup.py` by
+    path for the `Ado` client, token and team lookup. Keys are
+    `pr:<repoId>:<id>`, `build:<definitionId>:<branch>` and `wi:<id>`. Syncs
+    take `BEGIN IMMEDIATE` with a busy timeout, so two never interleave. The
+    `meta` table keeps `baseline:pr`, `baseline:build`, `baseline:wi` and
+    `last_sync` (an older single `baseline` key is migrated to all three).
+    Tests: `python3 -m unittest discover -s azure-devops/tests/ado-feed`.
+  - my-tabs does the background poll and the count badge (see my-main).
+  - Art: `feed`, `check`, `check-filled`, `refresh`, `panel-right`, `x`.
 - **Shared by every tool:**
   - `az` is tried as `az`, then `/opt/homebrew/bin/az`, then
     `/usr/local/bin/az`.
@@ -467,6 +531,7 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
     - `ado.org`: when it's missing, the org is parsed from
       `az devops configure -l`
     - `ado.standup.project` and `ado.standup.team`, both required by Standup
+    - `ado.feed.team`, optional; the Feed falls back to `ado.standup.team`
     - `ado.standup.blockTags`, default `["Blocked","Impediment","external-dependency"]`
     - `claude.model`, and `claude.models.review` / `claude.models.refine`, which
       default to `opus`
@@ -483,6 +548,8 @@ If some sections fail, a red-tinted banner says "Some data didn't load: …".
 - A mod reads its own files through `mods/<name>/…` paths, and those names are
   hard-coded. If you rename a mod, fix its `svg()` paths, the `run`/`openOverlay`
   mod names, the standup script path and `ado-menu`'s `ITEMS`.
+- `ado-feed/feed.py` imports `ado-standup/standup.py` by path, so ado-standup
+  must be installed, and renaming it breaks the feed.
 - The menu popup height is fixed at 52px per row plus 10. If you add a row, grow
   `height` in both `ado-menu/mod.json` and the tab-bar button's `openOverlay`.
 - Icon buttons inside clickable rows need

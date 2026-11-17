@@ -1,7 +1,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, exec, notify, playSound, appHome } from "herdr";
-import { readFile } from "fs/promises";
+import { readFile, exists } from "fs/promises";
 
 // The orchestrator daemon (mods/orch): polled for approvals so a new plan or
 // permission ask notifies here even with its dialog closed.
@@ -14,6 +14,7 @@ async function orchBase() {
   return "http://127.0.0.1:8490";
 }
 const ORCH_POLL_MS = 15000;
+const ADO_FEED_POLL_MS = 180000;
 async function orchGet(path) {
   const r = await exec("curl", ["-q", "--noproxy", "*", "-sf", "-m", "10", (await orchBase()) + path]);
   if (r.code !== 0) throw new Error("orchestrator unreachable");
@@ -37,6 +38,36 @@ export default class Tabs extends View {
     this.orchWaiting = 0;
     this.pollOrch(cx);
     cx.timer.every(ORCH_POLL_MS, (cx) => this.pollOrch(cx));
+    this.pollFeed(cx);
+    cx.timer.every(ADO_FEED_POLL_MS, (cx) => this.pollFeed(cx));
+  }
+
+  // ADO feed (mods/ado-feed): a background sync that announces new items once
+  // (--notify) with one summary popup, and keeps the ADO button's count. Any
+  // failure (not installed, ado-standup missing, no marker, fatal, error) is silent.
+  pollFeed(cx) {
+    if (this.feedBusy) return;
+    this.feedBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const home = appHome();
+        const py = `${home}/mods/ado-feed/feed.py`;
+        if (!(await exists(py))) return;
+        const out = await exec("python3", ["-I", py, "--home", home, "sync", "--notify"]);
+        const i = (out.stdout ?? "").indexOf("@@ADO-FEED@@");
+        if (i < 0) return;
+        const r = JSON.parse(out.stdout.slice(i + "@@ADO-FEED@@".length).trim());
+        // a failed run (fatal, error, no count) keeps the last count and posts nothing
+        if (!r || r.fatal || r.error || typeof r.open !== "number") return;
+        setShared("ado.feed.count", r.open);
+        if (r.summary) {
+          notify({ title: r.summary.title, body: r.summary.body, level: "info", timeout: 15000, action: { name: "mod.open", args: { name: "ado-feed" } } });
+        }
+      } catch { /* keep the last count, no popup */ } finally {
+        this.feedBusy = false;
+        cx.notify();
+      }
+    });
   }
 
   // Plans waiting for approval and agents halted on a permission. Each new one
@@ -127,11 +158,14 @@ export default class Tabs extends View {
 
   // Azure DevOps dropdown (mods/ado-menu): PRs and other ADO tools.
   adoButton(t, stop) {
+    const n = shared("ado.feed.count") ?? 0;
     return h_flex().id("ado-btn").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-      .text_size(12).bg(t.chrome).text_color(t.muted)
+      .text_size(12).bg(t.chrome).text_color(n ? t.foreground : t.muted)
       .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
-      .on_click(() => openOverlay({ mod: "ado-menu", kind: "popup", width: 300, height: 218 }))
+      .tooltip(n ? `${n} thing${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Azure DevOps")
+      .on_click(() => openOverlay({ mod: "ado-menu", kind: "popup", width: 300, height: 270 }))
       .child(svg("mods/ado-menu/ado.svg").size(14)).child("ADO")
+      .when(n > 0, el => el.child(div().px(5).rounded(8).bg(t.done).text_color(t.background).text_size(10.5).child(String(n))))
       .child(svg("mods/tools-menu/chevron-down.svg").size(11));
   }
 

@@ -1,0 +1,344 @@
+"""ado-feed fetchers: ADO REST responses -> observations (no network; FakeAdo).
+
+Run: python3 -m unittest discover -s azure-devops/tests/ado-feed
+"""
+import os
+import sys
+import unittest
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "mods", "ado-feed"))
+import feed  # noqa: E402
+
+NOW = datetime(2026, 11, 16, 12, 0, 0, tzinfo=timezone.utc)
+ME = {"id": "me-1", "name": "Lee Lead", "mail": "lee.lead@example.test"}
+
+
+def ts(**delta):
+    return feed.iso(NOW - timedelta(**delta))
+
+
+class FakeAdo:
+    """get/post match the first route whose key is a substring of the URL; calls are recorded."""
+    org, project = "acme", "Proj"
+
+    def __init__(self, routes):
+        self.routes, self.calls = routes, []
+
+    def _match(self, url):
+        hits = [k for k in self.routes if k in url]
+        if not hits:
+            raise AssertionError("unexpected URL " + url)
+        return self.routes[max(hits, key=len)]
+
+    def get(self, url):
+        self.calls.append(("GET", url))
+        return self._match(url)
+
+    def post(self, url, body):
+        self.calls.append(("POST", url, body))
+        return self._match(url)
+
+
+def reviewer(vote=0, id="me-1", mail="lee.lead@example.test", group=False, name="Lee Lead"):
+    return {"id": id, "uniqueName": mail, "displayName": name, "vote": vote, "isContainer": group}
+
+
+def pr(id=5, reviewers=(), draft=False, created=None):
+    return {"pullRequestId": id, "title": f"PR {id}", "isDraft": draft, "creationDate": created or ts(hours=10),
+            "createdBy": {"id": "au-1", "displayName": "Ann Author", "uniqueName": "ann@example.test"},
+            "repository": {"id": "repo-1", "name": "svc-a"}, "reviewers": list(reviewers)}
+
+
+def pr_routes(p, push=None, comments=(), vote_threads=()):
+    iters = [{"id": 1, "createdDate": ts(hours=9), "author": {"displayName": "Pat Pusher"}}]
+    if push:
+        iters.append({"id": 2, "createdDate": push, "author": {"displayName": "Pat Pusher"}})
+    threads = []
+    for who, when, system in comments:
+        threads.append({"comments": [{"author": {"id": who, "displayName": "Cam Commenter" if who != "me-1" else "Lee Lead"},
+                                      "publishedDate": when, "commentType": "system" if system else "text"}]})
+    for voter, when in vote_threads:
+        threads.append({"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"},
+                                       "CodeReviewVotedByIdentity": {"$value": "1"}},
+                        "identities": {"1": {"id": voter, "displayName": "Voter"}},
+                        "comments": [{"author": {"id": voter}, "publishedDate": when, "commentType": "system"}]})
+    return {"/git/pullrequests?": {"value": [p]},
+            f"/pullRequests/{p['pullRequestId']}/iterations": {"value": iters},
+            f"/pullRequests/{p['pullRequestId']}/threads": {"value": threads}}
+
+
+def run_pr(p, groups=(), **kw):
+    ado = FakeAdo(pr_routes(p, **kw))
+    return feed.pr_observations(
+        ado, ME, lambda r: (r.get("displayName") or "").split("\\")[-1].lower() in set(groups), NOW)
+
+
+class GroupMatcherTests(unittest.TestCase):
+    URL = "https://vssps.dev.azure.com/acme/_apis/identities?identityIds=g-1"
+
+    def grp(self):
+        return reviewer(0, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+
+    def run_with(self, routes, groups=()):
+        p = pr(reviewers=[self.grp()])
+        ado = FakeAdo({**pr_routes(p), **routes})
+        m = feed.group_matcher(ado, ME, set(groups))
+        return feed.pr_observations(ado, ME, m, NOW), ado
+
+    def test_direct_member_appears(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a", "me-1"]}]}})
+        self.assertEqual(len(o), 1)
+
+    def test_other_members_only_is_absent(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a", "b"]}]}})
+        self.assertEqual(o, [])
+
+    def test_lookup_failure_raises(self):
+        # a failed lookup fails the whole pr kind; name matching never decides absence
+        class Boom(FakeAdo):
+            def get(self, url):
+                if "vssps" in url:
+                    raise RuntimeError("HTTP 500")
+                return super().get(url)
+        p = pr(reviewers=[self.grp()])
+        for groups in ({"platform-devs"}, set()):
+            ado = Boom(pr_routes(p))
+            with self.assertRaises(RuntimeError):
+                feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, groups), NOW)
+
+    def test_name_match_is_an_additional_positive(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a"]}]}}, groups={"platform-devs"})
+        self.assertEqual(len(o), 1)
+
+    def test_lookup_once_per_group_id(self):
+        m_ado = FakeAdo({self.URL: {"value": [{"memberIds": ["me-1"]}]}})
+        m = feed.group_matcher(m_ado, ME, set())
+        for _ in range(3):
+            self.assertTrue(m({"id": "g-1", "displayName": "x"}))
+        self.assertEqual(sum("vssps" in c for c in [str(x) for x in m_ado.calls]), 1)
+
+
+class FetchPrTests(unittest.TestCase):
+    def test_me_from_connection_data(self):
+        ado = FakeAdo({"/_apis/connectionData": {"authenticatedUser": {
+            "id": "u-9", "providerDisplayName": "Sam Roe", "properties": {"Account": {"$value": "Sam@Example.TEST"}}}}})
+        self.assertEqual(feed.me(ado), {"id": "u-9", "name": "Sam Roe", "mail": "sam@example.test"})
+
+    def test_pr_personal_reviewer_no_vote_appears(self):
+        p = pr(reviewers=[reviewer(0)], created=ts(hours=10))
+        o = run_pr(p, push=ts(hours=5), comments=[("c-1", ts(hours=2), False)])
+        self.assertEqual(len(o), 1)
+        self.assertEqual(o[0]["key"], "pr:repo-1:5")
+        self.assertEqual(o[0]["event_at"], ts(hours=2))
+        self.assertEqual(o[0]["event_text"], "Cam Commenter commented")
+        self.assertEqual(o[0]["action"], "approve")
+        self.assertEqual(o[0]["sub"], "!5 · svc-a · Ann Author")
+        self.assertEqual(o[0]["ref"], {"project": "Proj", "repoId": "repo-1", "id": 5, "vote": 0})
+        self.assertEqual(o[0]["kind"], "pr")
+
+    def test_pr_opened_text_when_nothing_newer(self):
+        o = run_pr(pr(reviewers=[reviewer(0)], created=ts(hours=1)))
+        self.assertEqual(o[0]["event_text"], "opened by Ann Author")
+        self.assertEqual(o[0]["event_at"], ts(hours=1))
+
+    def test_pr_voted_then_pushed_reappears(self):
+        p = pr(reviewers=[reviewer(10)])
+        o = run_pr(p, push=ts(hours=1), vote_threads=[("me-1", ts(hours=3))])
+        self.assertEqual(len(o), 1)
+        self.assertEqual(o[0]["action"], "none")
+        self.assertEqual(o[0]["event_text"], "Pat Pusher pushed")
+        self.assertEqual(o[0]["ref"]["vote"], 10)
+
+    def test_pr_voted_after_activity_is_absent(self):
+        p = pr(reviewers=[reviewer(10)])
+        o = run_pr(p, push=ts(hours=3), comments=[("c-1", ts(hours=2), False)], vote_threads=[("me-1", ts(hours=1))])
+        self.assertEqual(o, [])
+
+    def test_pr_vote_without_vote_thread_reappears(self):
+        # vote_at missing is treated as "never": any activity is newer
+        o = run_pr(pr(reviewers=[reviewer(10)]), push=ts(hours=1))
+        self.assertEqual(len(o), 1)
+
+    def test_pr_group_only_appears_until_group_approves(self):
+        grp = lambda v: reviewer(v, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+        # me not listed personally; group vote 0 -> present
+        o = run_pr(pr(reviewers=[grp(0)]), groups={"platform-devs"})
+        self.assertEqual(len(o), 1)
+        self.assertEqual(o[0]["action"], "approve")
+        # group approved -> absent
+        self.assertEqual(run_pr(pr(reviewers=[grp(10)]), groups={"platform-devs"}), [])
+
+    def test_pr_personal_entry_ignores_group_approval(self):
+        grp = reviewer(10, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+        o = run_pr(pr(reviewers=[reviewer(0), grp]), groups={"platform-devs"})
+        self.assertEqual(len(o), 1)
+
+    def test_pr_not_a_reviewer_is_absent(self):
+        other = reviewer(0, id="x-1", mail="x@example.test", name="Xi Other")
+        grp = reviewer(0, id="g-2", mail="", group=True, name="[Proj]\\Other-Team")
+        self.assertEqual(run_pr(pr(reviewers=[other, grp]), groups={"platform-devs"}), [])
+
+    def test_pr_own_pr_is_absent(self):
+        p = pr(reviewers=[reviewer(0)])
+        p["createdBy"] = {"id": "me-1", "displayName": "Lee Lead", "uniqueName": "lee.lead@example.test"}
+        self.assertEqual(run_pr(p), [])
+        grp = reviewer(0, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+        p = pr(reviewers=[grp])
+        p["createdBy"] = {"id": "x", "uniqueName": "LEE.LEAD@example.test"}
+        self.assertEqual(run_pr(p, groups={"platform-devs"}), [])
+
+    def test_pr_draft_is_absent(self):
+        self.assertEqual(run_pr(pr(reviewers=[reviewer(0)], draft=True)), [])
+
+    def test_vote_thread_by_other_voter_ignored(self):
+        p = pr(reviewers=[reviewer(10)])
+        o = run_pr(p, push=ts(hours=1), vote_threads=[("other-9", ts(hours=0.5))])
+        self.assertEqual(len(o), 1)
+
+    def test_own_comments_do_not_count(self):
+        p = pr(reviewers=[reviewer(10)])
+        o = run_pr(p, comments=[("me-1", ts(hours=1), False), ("c-1", ts(hours=1), True)],
+                   vote_threads=[("me-1", ts(hours=2))])
+        self.assertEqual(o, [])
+
+
+def build(id, num, result, finish, defid=7, branch="refs/heads/main", reason="batchCI", name="Pipe A"):
+    return {"id": id, "buildNumber": num, "result": result, "finishTime": finish, "reason": reason,
+            "definition": {"id": defid, "name": name}, "sourceBranch": branch,
+            "requestedFor": {"displayName": "Ann Author"}}
+
+
+def run_builds(runs):
+    ado = FakeAdo({"/build/builds?": {"value": runs}})
+    return feed.build_observations(ado, NOW), ado
+
+
+class FetchBuildTests(unittest.TestCase):
+    def test_builds_grouped_by_pipeline_and_branch(self):
+        runs = [build(103, "20261116.3", "failed", ts(hours=1)), build(102, "20261116.2", "failed", ts(hours=2)),
+                build(101, "20261116.1", "partiallySucceeded", ts(hours=3)),
+                build(200, "9", "failed", ts(hours=1), defid=8, branch="refs/heads/dev", name="Pipe B")]
+        o, ado = run_builds(runs)
+        by = {x["key"]: x for x in o}
+        self.assertEqual(set(by), {"build:7:main", "build:8:dev"})
+        a = by["build:7:main"]
+        self.assertEqual(a["event_text"], "failed 3×")
+        self.assertEqual(a["ref"], {"project": "Proj", "build": 103})
+        self.assertEqual(a["title"], "Pipe A on main")
+        self.assertEqual(a["event_at"], ts(hours=1))
+        self.assertEqual(a["sub"], "#20261116.3 · Ann Author")
+        self.assertEqual(a["action"], "none")
+        self.assertEqual(by["build:8:dev"]["event_text"], "failed")
+        url = ado.calls[0][1]
+        self.assertIn("statusFilter=completed", url)
+        self.assertIn("minTime=2026-11-02T12:00:00Z", url)
+
+    def test_build_pr_build_suffix(self):
+        o, _ = run_builds([build(1, "5", "failed", ts(hours=1), reason="pullRequest")])
+        self.assertEqual(o[0]["sub"], "#5 · Ann Author · PR build")
+
+    def test_build_group_cleared_by_newer_success(self):
+        o, _ = run_builds([build(2, "2", "succeeded", ts(hours=1)), build(1, "1", "failed", ts(hours=2))])
+        self.assertEqual(o, [])
+
+    def test_build_failures_counted_after_last_success(self):
+        runs = [build(1, "1", "failed", ts(hours=5)), build(2, "2", "succeeded", ts(hours=4)),
+                build(3, "3", "failed", ts(hours=3)), build(4, "4", "failed", ts(hours=2))]
+        o, _ = run_builds(runs)
+        self.assertEqual(o[0]["event_text"], "failed 2×")
+        self.assertEqual(o[0]["ref"]["build"], 4)
+
+
+def wi_routes(items, updates, cats=None):
+    r = {"/wit/wiql": {"workItems": [{"id": i["id"]} for i in items]},
+         "/wit/workitemsbatch": {"value": items},
+         "/workitemtypes/": {"value": [{"name": n, "category": c} for n, c in (cats or {"Active": "InProgress", "Pending QA": "InProgress", "Closed": "Completed"}).items()]}}
+    for i in items:
+        r[f"/wit/workItems/{i['id']}/updates"] = {"value": updates.get(i["id"], [])}
+    return r
+
+
+def wi(id, state="Active", typ="Bug"):
+    return {"id": id, "fields": {"System.Title": f"Item {id}", "System.WorkItemType": typ, "System.State": state,
+                                 "System.AssignedTo": {"id": "me-1", "uniqueName": "lee.lead@example.test"},
+                                 "System.CreatedDate": ts(days=30), "System.CreatedBy": {"displayName": "Cy Creator"}}}
+
+
+def upd(when, new_id="me-1", by="Alex Doe", old=None, latest=False, by_id="a-1"):
+    """Real API: revisedDate is the supersede time (9999-01-01 on the newest); the change time is in System.ChangedDate."""
+    f = {"newValue": {"id": new_id, "uniqueName": "lee.lead@example.test" if new_id == "me-1" else "o@example.test"}}
+    if old:
+        f["oldValue"] = {"displayName": old}
+    return {"revisedDate": "9999-01-01T00:00:00Z" if latest else feed.iso(feed.parse_time(when) + timedelta(hours=1)),
+            "revisedBy": {"id": by_id, "displayName": by},
+            "fields": {"System.AssignedTo": f, "System.ChangedDate": {"newValue": when}}}
+
+
+def run_wi(items, updates, **kw):
+    return feed.wi_observations(FakeAdo(wi_routes(items, updates, **kw)), ME, NOW)
+
+
+class FetchWorkItemTests(unittest.TestCase):
+    def test_wi_assigned_by_someone(self):
+        o = run_wi([wi(11)], {11: [upd(ts(days=1), old="Sam Roe")]})
+        self.assertEqual(len(o), 1)
+        self.assertEqual(o[0]["event_at"], ts(days=1))
+        self.assertEqual(o[0]["event_text"], "assigned by Alex Doe, was Sam Roe")
+        self.assertEqual(o[0]["key"], "wi:11")
+        self.assertEqual(o[0]["sub"], "#11 · Bug · Active")
+        self.assertEqual(o[0]["action"], "none")
+        self.assertEqual(o[0]["ref"], {"project": "Proj", "id": 11, "state": "Active", "type": "Bug"})
+
+    def test_wi_latest_assignment_to_me_wins(self):
+        o = run_wi([wi(11)], {11: [upd(ts(days=5)), upd(ts(days=2), new_id="o-1"), upd(ts(days=3), by="Bo Late")]})
+        self.assertEqual(o[0]["event_at"], ts(days=3))
+        self.assertEqual(o[0]["event_text"], "assigned by Bo Late")
+
+    def test_wi_latest_update_uses_changed_date(self):
+        o = run_wi([wi(16)], {16: [upd(ts(days=1), latest=True)]})
+        self.assertEqual(o[0]["event_at"], ts(days=1))
+        self.assertNotIn("appear", o[0])
+        o = run_wi([wi(17)], {17: [upd(ts(days=20), latest=True)]})
+        self.assertEqual(o[0]["event_at"], ts(days=20))
+        self.assertIs(o[0]["appear"], False)
+
+    def test_wi_pending_qa_action_close(self):
+        o = run_wi([wi(12, state="Pending QA")], {12: [upd(ts(days=1))]})
+        self.assertEqual(o[0]["action"], "close")
+
+    def test_wi_completed_dropped(self):
+        self.assertEqual(run_wi([wi(13, state="Closed")], {13: [upd(ts(days=1))]}), [])
+
+    def test_wi_old_assignment_still_observed_without_appear(self):
+        # still assigned: it stays (never auto-resolves) but is never newly inserted
+        o = run_wi([wi(14)], {14: [upd(ts(days=20))]})
+        self.assertEqual([x["key"] for x in o], ["wi:14"])
+        self.assertIs(o[0]["appear"], False)
+        it = wi(18)  # no assignment update: created long ago
+        o = run_wi([it], {18: []})
+        self.assertIs(o[0]["appear"], False)
+
+    def test_wi_query_has_no_changed_date_window(self):
+        ado = FakeAdo(wi_routes([wi(11)], {11: [upd(ts(days=1))]}))
+        feed.wi_observations(ado, ME, NOW)
+        q = next(c[2]["query"] for c in ado.calls if c[0] == "POST" and "/wit/wiql" in c[1])
+        self.assertNotIn("ChangedDate] >=", q)
+        self.assertIn("[System.AssignedTo] = @Me", q)
+
+    def test_wi_self_assigned_skipped(self):
+        self.assertEqual(run_wi([wi(19)], {19: [upd(ts(days=1), by="Lee Lead", by_id="me-1")]}), [])
+        # someone else's later reassignment back to him counts
+        o = run_wi([wi(20)], {20: [upd(ts(days=3), by="Lee Lead", by_id="me-1"), upd(ts(days=1))]})
+        self.assertEqual(len(o), 1)
+
+    def test_wi_without_update_uses_created(self):
+        it = wi(15)
+        it["fields"]["System.CreatedDate"] = ts(days=2)
+        o = run_wi([it], {15: []})
+        self.assertEqual(o[0]["event_at"], ts(days=2))
+        self.assertEqual(o[0]["event_text"], "created by Cy Creator")
+
+
+if __name__ == "__main__":
+    unittest.main()

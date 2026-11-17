@@ -10,6 +10,7 @@ export const ITEMS = [
   { mod: "ado-pipelines", title: "Pipelines", about: "Recent runs and their logs", icon: "mods/ado-menu/rocket.svg" },
   { mod: "ado-workitems", title: "Work items", about: "Assigned to me, last 30 days", icon: "mods/ado-menu/workitems.svg" },
   { mod: "ado-standup", title: "Standup", about: "Team's completed work, reviews, blockers, deploys", icon: "mods/ado-menu/standup.svg" },
+  { mod: "ado-feed", title: "Feed", about: "What needs your attention", icon: "mods/ado-menu/feed.svg" },
 ];
 
 const GLYPH = { cmd: "⌘", shift: "⇧", alt: "⌥", ctrl: "⌃" };
