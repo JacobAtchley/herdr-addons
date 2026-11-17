@@ -60,7 +60,8 @@ def pr_routes(p, push=None, comments=(), vote_threads=()):
                                       "publishedDate": when, "commentType": "system" if system else "text"}]})
     for voter, when in vote_threads:
         threads.append({"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"},
-                                       "CodeReviewVotedByIdentity": {"$value": voter}},
+                                       "CodeReviewVotedByIdentity": {"$value": "1"}},
+                        "identities": {"1": {"id": voter, "displayName": "Voter"}},
                         "comments": [{"author": {"id": voter}, "publishedDate": when, "commentType": "system"}]})
     return {"/git/pullrequests?": {"value": [p]},
             f"/pullRequests/{p['pullRequestId']}/iterations": {"value": iters},
@@ -135,6 +136,11 @@ class FetchPrTests(unittest.TestCase):
     def test_pr_draft_is_absent(self):
         self.assertEqual(run_pr(pr(reviewers=[reviewer(0)], draft=True)), [])
 
+    def test_vote_thread_by_other_voter_ignored(self):
+        p = pr(reviewers=[reviewer(10)])
+        o = run_pr(p, push=ts(hours=1), vote_threads=[("other-9", ts(hours=0.5))])
+        self.assertEqual(len(o), 1)
+
     def test_own_comments_do_not_count(self):
         p = pr(reviewers=[reviewer(10)])
         o = run_pr(p, comments=[("me-1", ts(hours=1), False), ("c-1", ts(hours=1), True)],
@@ -204,11 +210,14 @@ def wi(id, state="Active", typ="Bug"):
                                  "System.CreatedDate": ts(days=30), "System.CreatedBy": {"displayName": "Cy Creator"}}}
 
 
-def upd(when, new_id="me-1", by="Alex Doe", old=None):
+def upd(when, new_id="me-1", by="Alex Doe", old=None, latest=False):
+    """Real API: revisedDate is the supersede time (9999-01-01 on the newest); the change time is in System.ChangedDate."""
     f = {"newValue": {"id": new_id, "uniqueName": "lee.lead@example.test" if new_id == "me-1" else "o@example.test"}}
     if old:
         f["oldValue"] = {"displayName": old}
-    return {"revisedDate": when, "revisedBy": {"displayName": by}, "fields": {"System.AssignedTo": f}}
+    return {"revisedDate": "9999-01-01T00:00:00Z" if latest else feed.iso(feed.parse_time(when) + timedelta(hours=1)),
+            "revisedBy": {"displayName": by},
+            "fields": {"System.AssignedTo": f, "System.ChangedDate": {"newValue": when}}}
 
 
 def run_wi(items, updates, **kw):
@@ -230,6 +239,11 @@ class FetchWorkItemTests(unittest.TestCase):
         o = run_wi([wi(11)], {11: [upd(ts(days=5)), upd(ts(days=2), new_id="o-1"), upd(ts(days=3), by="Bo Late")]})
         self.assertEqual(o[0]["event_at"], ts(days=3))
         self.assertEqual(o[0]["event_text"], "assigned by Bo Late")
+
+    def test_wi_latest_update_uses_changed_date(self):
+        o = run_wi([wi(16)], {16: [upd(ts(days=1), latest=True)]})
+        self.assertEqual(o[0]["event_at"], ts(days=1))
+        self.assertEqual(run_wi([wi(17)], {17: [upd(ts(days=20), latest=True)]}), [])
 
     def test_wi_pending_qa_action_close(self):
         o = run_wi([wi(12, state="Pending QA")], {12: [upd(ts(days=1))]})

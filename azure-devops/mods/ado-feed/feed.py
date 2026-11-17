@@ -231,7 +231,10 @@ def _pr_detail(ado, who, p):
     for t in threads:
         props = t.get("properties") or {}
         if (props.get("CodeReviewThreadType") or {}).get("$value") == "VoteUpdate":
-            if (props.get("CodeReviewVotedByIdentity") or {}).get("$value") == who["id"]:
+            v = (props.get("CodeReviewVotedByIdentity") or {}).get("$value")
+            # live shape: $value is an index into the thread's identities map; a direct id is also accepted
+            voter = (t.get("identities") or {}).get(v) or {}
+            if v == who["id"] or _is_me(voter, who):
                 vote_at += [c.get("publishedDate") for c in t.get("comments") or []] or [t.get("publishedDate")]
             continue
         for c in t.get("comments") or []:
@@ -328,6 +331,11 @@ def build_observations(ado, now):
     return out
 
 
+def _assigned_at(u):
+    at = ((u.get("fields") or {}).get("System.ChangedDate") or {}).get("newValue") or u["revisedDate"]
+    return parse_time(at)
+
+
 def wi_observations(ado, who, now):
     ids = standup.wiql(ado, f"[System.AssignedTo] = @Me AND [System.ChangedDate] >= @Today-{WI_ASSIGNED_DAYS}")
     items = []
@@ -345,8 +353,12 @@ def wi_observations(ado, who, now):
         ups = ado.get(f"/_apis/wit/workItems/{w['id']}/updates?api-version=7.1").get("value", [])
         mine = [u for u in ups if _is_me(((u.get("fields") or {}).get("System.AssignedTo") or {}).get("newValue"), who)]
         if mine:
-            u = max(mine, key=lambda u: parse_time(u["revisedDate"]))
-            at = u["revisedDate"]
+            u = max(mine, key=_assigned_at)
+            # revisedDate is when the revision was superseded (9999-01-01 on the newest);
+            # the real change time is fields["System.ChangedDate"].newValue
+            at = ((u.get("fields") or {}).get("System.ChangedDate") or {}).get("newValue")
+            if not at and parse_time(u["revisedDate"]).year < 9999:
+                at = u["revisedDate"]
             text = f"assigned by {(u.get('revisedBy') or {}).get('displayName')}"
             old = (u["fields"]["System.AssignedTo"].get("oldValue") or {}).get("displayName")
             if old:
