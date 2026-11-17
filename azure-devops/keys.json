@@ -3,6 +3,7 @@
     "cmd-shift-r": "mod.open:ado-prs",
     "cmd-shift-b": "mod.open:ado-pipelines",
     "cmd-shift-i": "mod.open:ado-workitems",
-    "cmd-shift-y": "mod.open:ado-standup"
+    "cmd-shift-y": "mod.open:ado-standup",
+    "cmd-shift-f": "mod.open:ado-feed"
   }
 }
