@@ -211,6 +211,24 @@ class TestResolve(CliBase):
         self.assertIn("403", out["error"])
         self.assertEqual(self.run_cmd("list", "--window", "1w")["open"], 1)
 
+    def test_resolve_approve_without_my_id_sends_nothing(self):
+        self.seed(self.pr_obs())
+        with mock.patch.object(feed, "me", lambda ado: {"id": None, "name": None, "mail": ""}):
+            out = self.run_cmd("resolve", "pr:repo1:7")
+        self.assertIn("Could not identify", out["error"])
+        self.assertEqual((self.ado.gets, self.ado.puts), ([], []))
+        self.assertEqual(self.run_cmd("list", "--window", "1w")["open"], 1)
+
+    def test_run_failure_in_connect_still_prints_marker(self):
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            feed.main(["--home", os.path.join(self.home, "missing", "dir"), "list"])
+        head, _, body = buf.getvalue().partition("\n")
+        self.assertEqual(head, feed.MARKER)
+        self.assertIn("fatal", json.loads(body))
+
     def test_resolve_unknown_key(self):
         self.assertEqual(self.run_cmd("resolve", "nope"), {"error": "No such item"})
 

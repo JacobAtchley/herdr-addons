@@ -254,8 +254,41 @@ def _pr_detail(ado, who, p):
     return push, comment, _latest(vote_at)
 
 
-def pr_observations(ado, who, groups, now):
-    """groups: lowercased last `\\` segments of the reviewer groups he's in."""
+def group_matcher(ado, who, groups):
+    """is_mine_group(reviewer): he is a direct member of the group (identities lookup,
+    cached per group id for this matcher's life), or its lowercased last `\\` segment is
+    in `groups` (the fallback, also used when the lookup fails)."""
+    import threading
+    cache, lock = {}, threading.Lock()
+
+    def by_name(r):
+        return (r.get("displayName") or "").split("\\")[-1].lower() in groups
+
+    def direct(gid):
+        with lock:
+            if gid in cache:
+                return cache[gid]
+        try:
+            r = ado.get(f"https://vssps.dev.azure.com/{ado.org}/_apis/identities?identityIds={gid}"
+                        "&queryMembership=Direct&api-version=7.1")
+            val = who["id"] in ((r.get("value") or [{}])[0].get("memberIds") or [])
+        except Exception:
+            val = None
+        with lock:
+            cache[gid] = val
+        return val
+
+    def is_mine_group(r):
+        if r.get("id") and who.get("id"):
+            d = direct(r["id"])
+            if d is not None:
+                return d or by_name(r)
+        return by_name(r)
+    return is_mine_group
+
+
+def pr_observations(ado, who, is_mine_group, now):
+    """is_mine_group(reviewer) -> bool for a container reviewer (see group_matcher)."""
     r = ado.get(f"/{q(ado.project)}/_apis/git/pullrequests?searchCriteria.status=active&$top=1000&api-version=7.1")
     cands = []
     for p in r.get("value", []):
@@ -263,7 +296,7 @@ def pr_observations(ado, who, groups, now):
             continue
         revs = p.get("reviewers") or []
         personal = next((x for x in revs if not x.get("isContainer") and _is_me(x, who)), None)
-        mine = [x for x in revs if x.get("isContainer") and (x.get("displayName") or "").split("\\")[-1].lower() in groups]
+        mine = [x for x in revs if x.get("isContainer") and is_mine_group(x)]
         if personal or mine:
             cands.append((p, personal, mine))
 
@@ -445,7 +478,7 @@ def _fetch_all(ado, settings, now):
             errors["pr"] = _err(e)
         jobs = {"build": f_build}
         if who is not None and groups is not None:
-            jobs["pr"] = pool.submit(pr_observations, ado, who, groups, now)
+            jobs["pr"] = pool.submit(pr_observations, ado, who, group_matcher(ado, who, groups), now)
         if who is not None:
             jobs["wi"] = pool.submit(wi_observations, ado, who, now)
         for kind, fut in jobs.items():
@@ -481,8 +514,11 @@ def _get_row(conn, key):
 def _act(ado, row):
     ref, action = row["ref"], row["action"]
     if action == "approve":
+        my_id = me(ado).get("id")
+        if not my_id:
+            raise RuntimeError("Could not identify you in ADO")
         url = (f"/{q(ref['project'])}/_apis/git/repositories/{ref['repoId']}/pullRequests/{ref['id']}"
-               f"/reviewers/{me(ado)['id']}?api-version=7.1")
+               f"/reviewers/{my_id}?api-version=7.1")
         try:
             vote = ado.get(url).get("vote", 0)
         except RuntimeError as e:
@@ -540,10 +576,13 @@ def run(argv):
     for name in ("resolve", "unresolve"):
         sub.add_parser(name).add_argument("key")
     args = ap.parse_args(argv)
-    settings = load_settings(args.home)
-    if not settings["project"] or not settings["team"]:
-        return {"fatal": FATAL}
-    conn = connect(str(Path(args.home) / "ado-feed.db"))
+    try:
+        settings = load_settings(args.home)
+        if not settings["project"] or not settings["team"]:
+            return {"fatal": FATAL}
+        conn = connect(str(Path(args.home) / "ado-feed.db"))
+    except Exception as e:
+        return {"fatal": _err(e)}
     try:
         return {"sync": cmd_sync, "list": cmd_list, "resolve": cmd_resolve, "unresolve": cmd_unresolve}[args.cmd](conn, settings, args)
     except Exception as e:

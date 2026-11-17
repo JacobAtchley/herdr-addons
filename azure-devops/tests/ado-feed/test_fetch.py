@@ -70,7 +70,48 @@ def pr_routes(p, push=None, comments=(), vote_threads=()):
 
 def run_pr(p, groups=(), **kw):
     ado = FakeAdo(pr_routes(p, **kw))
-    return feed.pr_observations(ado, ME, set(groups), NOW)
+    return feed.pr_observations(
+        ado, ME, lambda r: (r.get("displayName") or "").split("\\")[-1].lower() in set(groups), NOW)
+
+
+class GroupMatcherTests(unittest.TestCase):
+    URL = "https://vssps.dev.azure.com/acme/_apis/identities?identityIds=g-1"
+
+    def grp(self):
+        return reviewer(0, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+
+    def run_with(self, routes, groups=()):
+        p = pr(reviewers=[self.grp()])
+        ado = FakeAdo({**pr_routes(p), **routes})
+        m = feed.group_matcher(ado, ME, set(groups))
+        return feed.pr_observations(ado, ME, m, NOW), ado
+
+    def test_direct_member_appears(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a", "me-1"]}]}})
+        self.assertEqual(len(o), 1)
+
+    def test_other_members_only_is_absent(self):
+        o, _ = self.run_with({self.URL: {"value": [{"memberIds": ["a", "b"]}]}})
+        self.assertEqual(o, [])
+
+    def test_lookup_failure_falls_back_to_name(self):
+        class Boom(FakeAdo):
+            def get(self, url):
+                if "vssps" in url:
+                    raise RuntimeError("HTTP 500")
+                return super().get(url)
+        p = pr(reviewers=[self.grp()])
+        ado = Boom(pr_routes(p))
+        self.assertEqual(len(feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, {"platform-devs"}), NOW)), 1)
+        ado = Boom(pr_routes(p))
+        self.assertEqual(feed.pr_observations(ado, ME, feed.group_matcher(ado, ME, set()), NOW), [])
+
+    def test_lookup_once_per_group_id(self):
+        m_ado = FakeAdo({self.URL: {"value": [{"memberIds": ["me-1"]}]}})
+        m = feed.group_matcher(m_ado, ME, set())
+        for _ in range(3):
+            self.assertTrue(m({"id": "g-1", "displayName": "x"}))
+        self.assertEqual(sum("vssps" in c for c in [str(x) for x in m_ado.calls]), 1)
 
 
 class FetchPrTests(unittest.TestCase):
