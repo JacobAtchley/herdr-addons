@@ -58,7 +58,7 @@ should surface these within minutes, so he can act the same day.
   dropdown, under Standup: "Feed", with the description "What needs your
   attention".
   - It's a dialog like the others (0.8 × 0.8).
-  - `keys.json` gets a key. Builder's call: `cmd-shift-a`, if it's free.
+  - `keys.json` gets a key. Builder's call: `cmd-shift-f` (`cmd-shift-a` is taken by agent-board).
 - **The dropdown height:** grow `ado-menu/mod.json` and the `openOverlay` height
   in my-tabs from 218 to 270 (52 per row + 10).
 - **"Team"** means the same team as the standup: `ado.standup.project` and the
