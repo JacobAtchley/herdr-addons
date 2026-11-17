@@ -11,7 +11,7 @@ agent can rebuild it from), a `preview.png`, its mods, and its keys.
 
 | Addon | Key | What it does |
 |---|---|---|
-| [**azure-devops**](azure-devops/RECIPE.md) | `⌘⇧R` `⌘⇧B` `⌘⇧I` `⌘⇧Y` | Pull requests, pipelines (with logs), work items (with an editable details view) and a team standup, for every project in your Azure DevOps org. An ADO dropdown in the tab bar opens them. |
+| [**azure-devops**](azure-devops/RECIPE.md) | `⌘⇧R` `⌘⇧B` `⌘⇧I` `⌘⇧Y` `⌘⇧F` | Pull requests, pipelines (with logs), work items (with an editable details view), a team standup and a feed of what needs a team lead (PRs to review, failed builds, newly assigned items, with popups and a count), for every project in your Azure DevOps org. An ADO dropdown in the tab bar opens them. |
 | [**datadog**](datadog/RECIPE.md) | `⌘⇧E` | What needs attention in one Datadog env: triggered monitors, Error Tracking issues, clustered error logs, APM error spans. |
 | [**cc-usage**](cc-usage/RECIPE.md) | `⌘⇧U` | Claude Code usage like ccusage: cost and tokens by day, model, repo, branch and session, the live 5-hour block, and your plan limits. |
 | [**orchestrator**](orchestrator/RECIPE.md) | — | Inbox for a local agent-orchestrator daemon: sessions, plan and permission approvals, PR review queue, plus a sidebar list. Needs an orchestrator API at `orchestrator.url`. |
@@ -108,6 +108,7 @@ the default below applies.
 | `ado.org` | all ADO mods | `az devops configure` default | Azure DevOps organization name (the part after `dev.azure.com/`). |
 | `ado.standup.project` | ado-standup | **required** | Project whose team the standup shows. |
 | `ado.standup.team` | ado-standup | **required** | Team shown first. Switching teams in the panel is remembered. |
+| `ado.feed.team` | ado-feed | `ado.standup.team` | Team the feed follows. |
 | `ado.standup.blockTags` | ado-standup | `["Blocked", "Impediment", "external-dependency"]` | Work item tags that count as an impediment. |
 | `datadog.env` | dd-attention | `prod` | Datadog `env:` tag to watch. |
 | `orchestrator.url` | orch, orch-sidebar, my-tabs | `http://127.0.0.1:8490` | The orchestrator daemon's API. |
