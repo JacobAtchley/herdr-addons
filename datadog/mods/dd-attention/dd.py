@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Datadog "needs attention" for the dd-attention herdr mod.
 
-Reads DD_API_KEY and DD_APP_KEY (or DD_APPLICATION_KEY) from the environment,
-optional DD_SITE (default datadoghq.com). Asks four things in parallel:
+Reads a Datadog Personal Access Token from DATADOG_PAT (or DD_PAT), sent as
+`Authorization: Bearer` (Datadog rejects a PAT in the DD-API-KEY header).
+Without one, falls back to DD_API_KEY + DD_APP_KEY (or DD_APPLICATION_KEY).
+Optional DD_SITE / DATADOG_SITE (default datadoghq.com). Asks four things in parallel:
 triggered monitors, Error Tracking issues, error logs, APM error spans.
 Prints one JSON object after a MARKER line, so shell start-up noise before it
 is ignored. Keys are never printed.
@@ -25,15 +27,17 @@ TIMEOUT = 25
 
 
 def keys():
+    pat = os.environ.get("DATADOG_PAT") or os.environ.get("DD_PAT")
     api = os.environ.get("DD_API_KEY") or os.environ.get("DATADOG_API_KEY")
     app = os.environ.get("DD_APP_KEY") or os.environ.get("DD_APPLICATION_KEY") or os.environ.get("DATADOG_APP_KEY")
-    return api, app
+    return pat, api, app
 
 
 class DD:
-    def __init__(self, api, app, site):
+    def __init__(self, site, pat=None, api=None, app=None):
         self.base = f"https://api.{site}"
-        self.headers = {"DD-API-KEY": api, "DD-APPLICATION-KEY": app, "Content-Type": "application/json", "Accept": "application/json"}
+        auth = {"Authorization": f"Bearer {pat}"} if pat else {"DD-API-KEY": api, "DD-APPLICATION-KEY": app}
+        self.headers = {**auth, "Content-Type": "application/json", "Accept": "application/json"}
 
     def call(self, method, path, body=None, params=None):
         url = self.base + path + ("?" + urllib.parse.urlencode(params) if params else "")
@@ -212,14 +216,14 @@ def main():
     ap.add_argument("--env", default="prod")
     ap.add_argument("--hours", type=int, default=24)
     args = ap.parse_args()
-    api, app = keys()
-    site = os.environ.get("DD_SITE") or "datadoghq.com"
+    pat, api, app = keys()
+    site = os.environ.get("DD_SITE") or os.environ.get("DATADOG_SITE") or "datadoghq.com"
     result = {"generated": time.time(), "site": site, "env": args.env, "hours": args.hours}
-    if not api or not app:
+    if not pat and not (api and app):
         result["fatal"] = "missing_keys"
-        result["missing"] = [n for n, v in (("DD_API_KEY", api), ("DD_APP_KEY", app)) if not v]
+        result["missing"] = ["DATADOG_PAT"]
     else:
-        dd = DD(api, app, site)
+        dd = DD(site, pat=pat, api=api, app=app)
         jobs = {"monitors": monitors, "issues": issues, "logs": logs, "apm": apm}
         with ThreadPoolExecutor(len(jobs)) as pool:
             futs = {k: pool.submit(fn, dd, args.env, args.hours) for k, fn in jobs.items()}

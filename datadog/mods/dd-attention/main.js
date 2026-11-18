@@ -343,15 +343,14 @@ export default class DdAttention extends View {
       v_flex().max_w(620).gap(10).p(18).rounded(10).bg(t.background).border(1).border_color(t.border)
         .child(div().text_size(14).font_semibold().text_color(t.foreground).child("Connect Datadog"))
         .child(div().text_size(12.5).text_color(t.muted).child(
-          `This panel calls the Datadog API with your own keys. ${missing?.length ? `Missing: ${missing.join(", ")}.` : ""} Create an API key and an Application key (Organization Settings → API Keys / Application Keys), then add them to ~/.zshenv:`))
+          `This panel calls the Datadog API with your own Personal Access Token. ${missing?.length ? `Missing: ${missing.join(", ")}.` : ""} Create one (Personal Settings → Personal Access Tokens), then add it to ~/.zshenv:`))
         .child(v_flex().p(10).rounded(6).bg(t.raised).gap(2)
-          .child(line("export DD_API_KEY=…"))
-          .child(line("export DD_APP_KEY=…"))
+          .child(line("export DATADOG_PAT=…"))
           .child(line("# optional, default datadoghq.com"))
-          .child(line("export DD_SITE=datadoghq.com")))
+          .child(line("export DATADOG_SITE=datadoghq.com")))
         .child(div().text_size(12).text_color(t.dim).child(
-          "The Application key needs read access to monitors, Error Tracking, logs and APM (scopes: monitors_read, error_tracking_read, logs_read_data, apm_read). Then press refresh."))
-        .child(h_flex().child(this.linkButton(t, "keys-link", "Open API keys page", () => this.browse("/organization-settings/api-keys")))));
+          "The token needs read access to monitors, Error Tracking, logs and APM (scopes: monitors_read, error_tracking_read, logs_read_data, apm_read). DD_API_KEY + DD_APP_KEY still work as a fallback. Then press refresh."))
+        .child(h_flex().child(this.linkButton(t, "keys-link", "Open personal settings", () => this.browse("/personal-settings/profile")))));
   }
 
   body(t) {
@@ -366,16 +365,16 @@ export default class DdAttention extends View {
     if (r.fatal === "missing_keys") return this.setupHelp(t, r.missing);
     if (r.fatal === "auth") {
       return center(
-        div().text_size(13).text_color(t.blocked).child("Datadog rejected the keys"),
+        div().text_size(13).text_color(t.blocked).child("Datadog rejected the token"),
         div().text_size(12).text_color(t.muted).child(this.section("monitors")?.error ?? ""),
-        div().text_size(12).text_color(t.dim).child(`Check DD_API_KEY / DD_APP_KEY and DD_SITE (now ${r.site}).`));
+        div().text_size(12).text_color(t.dim).child(`Check DATADOG_PAT and DATADOG_SITE (now ${r.site}).`));
     }
     const s = this.section(this.tab);
     if (s && !s.ok) {
       return center(
         div().text_size(13).text_color(t.blocked).child(`Couldn't load ${TABS.find((x) => x.key === this.tab)?.label ?? this.tab}`),
         div().max_w(700).text_size(12).text_color(t.muted).child(s.error),
-        div().text_size(12).text_color(t.dim).child("A 403 usually means the Application key lacks that scope."));
+        div().text_size(12).text_color(t.dim).child("A 403 usually means the token lacks that scope."));
     }
     const rows = { monitors: () => this.monitorRows(t), issues: () => this.issueRows(t), logs: () => this.logRows(t), apm: () => this.apmRows(t) }[this.tab]?.() ?? [];
     const note = this.tab === "logs" && s?.data
