@@ -1,6 +1,6 @@
 // Feed: what needs a team lead's attention, from Azure DevOps.
 //   PRs waiting on his approval that nobody else has reviewed or commented on,
-//   failing builds, and work items newly assigned to him (not in Code Review or
+//   his own PRs with feedback still to address, failing builds, and work items newly assigned to him (not in Code Review or
 //   Pending QA). Each row has a toggle that resolves it (approving the PR when
 //   that applies). Data and state come from feed.py,
 //   which keeps a local database; this view only lists, syncs and toggles.
@@ -13,7 +13,7 @@ import { exec, theme, props, closeOverlay, openOverlay, run, notify, appHome, se
 
 const SYNC_MS = 120000;
 const ICON = (n) => `mods/ado-feed/${n}.svg`;
-const KIND_COLOR = { pr: "#9085e9", build: "#d03b3b", wi: "#3987e5" };
+const KIND_COLOR = { pr: "#9085e9", mine: "#e0a030", build: "#d03b3b", wi: "#3987e5" };
 const S = { critical: "#d03b3b" };
 const MARKER = "@@ADO-FEED@@\n";
 const WINDOWS = [
@@ -144,7 +144,7 @@ export default class Feed extends View {
   // arrow and Esc return here.
   openRow(row) {
     const ref = row.ref ?? {};
-    if (row.kind === "pr" && ref.repoId) {
+    if ((row.kind === "pr" || row.kind === "mine") && ref.repoId) {
       openOverlay({
         mod: "ado-prs", kind: "dialog", width: 0.94, height: 0.92,
         props: { review: { project: ref.project, repoId: ref.repoId, id: ref.id, returnTo: "Feed" } },

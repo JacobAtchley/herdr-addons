@@ -30,8 +30,9 @@ from datetime import datetime, timedelta, timezone
 MARKER = "@@ADO-FEED@@"
 PURGE_DAYS = 30
 WINDOWS = {"24h": timedelta(hours=24), "48h": timedelta(hours=48), "1w": timedelta(days=7)}
-KINDS = ("pr", "build", "wi")
+KINDS = ("pr", "mine", "build", "wi")
 LABELS = {"pr": ("PR to review", "PRs to review"),
+          "mine": ("PR with feedback", "PRs with feedback"),
           "build": ("failed build", "failed builds"),
           "wi": ("item assigned to you", "items assigned to you")}
 
@@ -205,7 +206,7 @@ def summary(new):
     if not new:
         return None
     parts = []
-    for kind in ("pr", "build", "wi"):
+    for kind in KINDS:
         n = sum(1 for r in new if r["kind"] == kind)
         if n:
             parts.append(f"{n} {LABELS[kind][0 if n == 1 else 1]}")
@@ -374,6 +375,69 @@ def pr_observations(ado, who, is_mine_group, now):
         return [o for o in pool.map(one, cands) if o]
 
 
+OPEN_THREAD = ("active", "pending")
+VOTE_TEXT = {-5: "wait for author", -10: "reject"}
+
+
+def mine_observations(ado, who, now):
+    """His own active PRs with feedback still to address: comment threads in which
+    someone else has commented that are still active or pending, or a wait/reject
+    vote from someone else. Once every such thread is resolved (fixed, closed, won't
+    fix, by design), the votes change, or the PR completes, it is no longer observed
+    and the row auto-resolves."""
+    r = ado.get(f"/{q(ado.project)}/_apis/git/pullrequests?searchCriteria.status=active"
+                f"&searchCriteria.creatorId={who['id']}&$top=1000&api-version=7.1")
+    prs = [p for p in r.get("value", []) if p.get("status", "active") == "active" and _is_me(p.get("createdBy"), who)]
+
+    def one(p):
+        repo = p["repository"]
+        base = f"/{q(ado.project)}/_apis/git/repositories/{repo['id']}/pullRequests/{p['pullRequestId']}"
+        threads = ado.get(f"{base}/threads?api-version=7.1").get("value", [])
+        open_threads, events, vote_at = 0, [], {}
+        for t in threads:
+            if t.get("isDeleted"):
+                continue
+            props = t.get("properties") or {}
+            typ = (props.get("CodeReviewThreadType") or {}).get("$value")
+            if typ == "VoteUpdate":
+                v = (props.get("CodeReviewVotedByIdentity") or {}).get("$value")
+                voter = (t.get("identities") or {}).get(v) or {"id": v}
+                times = [c.get("publishedDate") for c in t.get("comments") or []] + [t.get("publishedDate")]
+                at = _latest(times + [vote_at.get(voter.get("id"))])
+                if voter.get("id") and at:
+                    vote_at[voter["id"]] = at
+                continue
+            if typ or t.get("status") not in OPEN_THREAD:
+                continue
+            theirs = [c for c in t.get("comments") or [] if c.get("commentType") != "system" and not c.get("isDeleted")
+                      and c.get("publishedDate") and not _is_me(c.get("author"), who)]
+            if theirs:
+                open_threads += 1
+                c = max(theirs, key=lambda c: parse_time(c["publishedDate"]))
+                events.append((c["publishedDate"], (c.get("author") or {}).get("displayName")))
+        votes = [x for x in p.get("reviewers") or []
+                 if not x.get("isContainer") and x.get("vote", 0) < 0 and not _is_me(x, who)]
+        if not open_threads and not votes:
+            return None
+        parts, times = [], []
+        if events:
+            at, name = max(events, key=lambda e: parse_time(e[0]))
+            parts.append(f"{name} commented · {open_threads} open thread{'' if open_threads == 1 else 's'}")
+            times.append(at)
+        for x in votes:
+            parts.append(f"{x.get('displayName')} voted {VOTE_TEXT.get(x['vote'], 'wait for author')}")
+            times.append(vote_at.get(x.get("id")))
+        at = _latest(times) or p.get("creationDate")
+        return {"key": f"mine:{repo['id']}:{p['pullRequestId']}", "kind": "mine", "title": p.get("title"),
+                "sub": f"!{p['pullRequestId']} · {repo.get('name')} · your PR",
+                "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_git/{q(repo.get('name') or '')}/pullrequest/{p['pullRequestId']}",
+                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"]},
+                "event_at": iso(parse_time(at)), "event_text": " · ".join(parts), "action": "none"}
+
+    with ThreadPoolExecutor(8) as pool:
+        return [o for o in pool.map(one, prs) if o]
+
+
 def build_observations(ado, now):
     since = (now - timedelta(days=BUILD_DAYS)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = ado.get(f"/{q(ado.project)}/_apis/build/builds?minTime={since}&statusFilter=completed"
@@ -517,7 +581,7 @@ def _fetch_all(ado, settings, now):
         try:
             who = f_me.result()
         except Exception as e:
-            errors["pr"] = errors["wi"] = _err(e)
+            errors["pr"] = errors["wi"] = errors["mine"] = _err(e)
         try:
             info = f_team.result()
             groups = {(g or "").split("\\")[-1].lower() for g in info.get("groups") or []}
@@ -529,6 +593,7 @@ def _fetch_all(ado, settings, now):
             jobs["pr"] = pool.submit(pr_observations, ado, who, group_matcher(ado, who, groups), now)
         if who is not None:
             jobs["wi"] = pool.submit(wi_observations, ado, who, now)
+            jobs["mine"] = pool.submit(mine_observations, ado, who, now)
         for kind, fut in jobs.items():
             try:
                 obs_ += fut.result()

@@ -222,6 +222,85 @@ class FetchPrTests(unittest.TestCase):
         self.assertEqual(o, [])
 
 
+def my_pr(id=9, reviewers=(), status="active"):
+    p = pr(id=id, reviewers=reviewers)
+    p["createdBy"] = {"id": "me-1", "displayName": "Lee Lead", "uniqueName": "lee.lead@example.test"}
+    p["status"] = status
+    return p
+
+
+def thread(status, *comments, system_type=None):
+    t = {"status": status, "comments": [
+        {"author": {"id": a, "displayName": n}, "publishedDate": when, "commentType": "text"} for a, n, when in comments]}
+    if system_type:
+        t["properties"] = {"CodeReviewThreadType": {"$value": system_type}}
+    return t
+
+
+def run_mine(p, threads=(), vote_threads=()):
+    th = list(threads)
+    for voter, name, when in vote_threads:
+        th.append({"properties": {"CodeReviewThreadType": {"$value": "VoteUpdate"},
+                                  "CodeReviewVotedByIdentity": {"$value": "1"}},
+                   "identities": {"1": {"id": voter, "displayName": name}},
+                   "comments": [{"author": {"id": voter}, "publishedDate": when, "commentType": "system"}]})
+    ado = FakeAdo({"/git/pullrequests?": {"value": [p]},
+                   f"/pullRequests/{p['pullRequestId']}/threads": {"value": th}})
+    return feed.mine_observations(ado, ME, NOW), ado
+
+
+MARC = ("m-1", "Marc Reviewer")
+
+
+class FetchMinePrTests(unittest.TestCase):
+    def test_open_feedback_thread_appears(self):
+        o, ado = run_mine(my_pr(), [thread("active", (*MARC, ts(hours=3))), thread("active", (*MARC, ts(hours=1)))])
+        self.assertEqual(len(o), 1)
+        x = o[0]
+        self.assertEqual((x["key"], x["kind"], x["action"]), ("mine:repo-1:9", "mine", "none"))
+        self.assertEqual(x["event_at"], ts(hours=1))
+        self.assertEqual(x["event_text"], "Marc Reviewer commented · 2 open threads")
+        self.assertEqual(x["ref"], {"project": "Proj", "repoId": "repo-1", "id": 9})
+        self.assertEqual(x["sub"], "!9 · svc-a · your PR")
+        self.assertTrue(any("creatorId=me-1" in c[1] for c in ado.calls))
+
+    def test_reply_in_others_thread_counts_and_uses_latest_other_comment(self):
+        o, _ = run_mine(my_pr(), [thread("pending", ("me-1", "Lee Lead", ts(hours=4)), (*MARC, ts(hours=2)),
+                                         ("me-1", "Lee Lead", ts(hours=1)))])
+        self.assertEqual(o[0]["event_at"], ts(hours=2))
+        self.assertEqual(o[0]["event_text"], "Marc Reviewer commented · 1 open thread")
+
+    def test_all_threads_addressed_is_absent(self):
+        for st in ("fixed", "closed", "wontFix", "byDesign"):
+            self.assertEqual(run_mine(my_pr(), [thread(st, (*MARC, ts(hours=1)))])[0], [], st)
+
+    def test_own_and_system_threads_ignored(self):
+        o, _ = run_mine(my_pr(), [thread("active", ("me-1", "Lee Lead", ts(hours=1))),
+                                  thread("active", (*MARC, ts(hours=1)), system_type="PolicyStatusUpdate")])
+        self.assertEqual(o, [])
+
+    def test_wait_vote_appears_until_changed(self):
+        o, _ = run_mine(my_pr(reviewers=[reviewer(-5, id="m-1", mail="m@example.test", name="Marc Reviewer")]),
+                        vote_threads=[("m-1", "Marc Reviewer", ts(hours=2))])
+        self.assertEqual(o[0]["event_text"], "Marc Reviewer voted wait for author")
+        self.assertEqual(o[0]["event_at"], ts(hours=2))
+        o, _ = run_mine(my_pr(reviewers=[reviewer(-10, id="m-1", mail="m@example.test", name="Marc Reviewer")]))
+        self.assertEqual(o[0]["event_text"], "Marc Reviewer voted reject")
+        # approval only: nothing to address
+        self.assertEqual(run_mine(my_pr(reviewers=[reviewer(10, id="m-1", mail="m@example.test", name="Marc Reviewer")]))[0], [])
+
+    def test_vote_and_threads_combined(self):
+        o, _ = run_mine(my_pr(reviewers=[reviewer(-5, id="m-1", mail="m@example.test", name="Marc Reviewer")]),
+                        [thread("active", ("c-1", "Cam Commenter", ts(hours=1)))],
+                        vote_threads=[("m-1", "Marc Reviewer", ts(hours=3))])
+        self.assertEqual(o[0]["event_text"], "Cam Commenter commented · 1 open thread · Marc Reviewer voted wait for author")
+        self.assertEqual(o[0]["event_at"], ts(hours=1))
+
+    def test_completed_pr_absent(self):
+        # the query asks for active PRs only; a non-active one slipping through is skipped
+        self.assertEqual(run_mine(my_pr(status="completed"), [thread("active", (*MARC, ts(hours=1)))])[0], [])
+
+
 def build(id, num, result, finish, defid=7, branch="refs/heads/main", reason="batchCI", name="Pipe A"):
     return {"id": id, "buildNumber": num, "result": result, "finishTime": finish, "reason": reason,
             "definition": {"id": defid, "name": name}, "sourceBranch": branch,
