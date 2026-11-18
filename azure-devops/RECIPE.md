@@ -244,7 +244,7 @@ lead, newest first. Header: icon and "Feed" with `project · team`, time pills
 (24 hours, 48 hours, 1 week), a "Show resolved" toggle, "updated Nm ago",
 refresh, dock as pane and close. Each row has a lead bar by kind, the title, a
 sub-line saying what happened, the time ago, and a round check toggle on the
-right whose tooltip names the action. Clicking a row opens the item as a stacked
+right whose tooltip names the action. PR rows (to review and your own) also show a pill such as "2 open · 3 resolved": comment threads in which someone other than the PR's author has commented, active or pending against every other status. Clicking a row opens the item as a stacked
 dialog: a PR in the `ado-prs` review (`returnTo: "Feed"`), a build's latest
 failed run in `ado-pipelines`, a work item in the `ado-workitems` detail. The
 team is `ado.feed.team`, else `ado.standup.team`, in `ado.standup.project`. A

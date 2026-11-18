@@ -191,6 +191,17 @@ export default class Feed extends View {
     return "Resolve";
   }
 
+  // PR rows: feedback threads still open against those resolved.
+  threads(t, id, row) {
+    const n = row.ref.threads;
+    const label = (k, v) => `${v} ${k}`;
+    return h_flex().id(`${id}-threads`).flex_none().gap(6).px(7).py(2).rounded(10).bg(t.background)
+      .tooltip(`Comment threads: ${n.open} open, ${n.resolved} resolved`)
+      .child(div().text_size(11).text_color(n.open > 0 ? "#e0a030" : t.dim).child(label("open", n.open)))
+      .child(div().text_size(11).text_color(t.dim).child("·"))
+      .child(div().text_size(11).text_color(n.resolved > 0 ? "#3fa66b" : t.dim).child(label("resolved", n.resolved)));
+  }
+
   row(t, row) {
     const id = `row-${row.key.replace(/[^A-Za-z0-9]/g, "-")}`;
     const done = Boolean(row.resolved_at);
@@ -207,6 +218,7 @@ export default class Feed extends View {
       .child(v_flex().flex_1().min_w(0)
         .child(div().truncate().text_size(12.5).child(row.title ?? ""))
         .child(div().truncate().text_size(11).text_color(t.dim).child(sub)))
+      .when(Boolean(row.ref?.threads), (el) => el.child(this.threads(t, id, row)))
       .child(div().flex_none().text_size(11.5).text_color(t.muted).child(right))
       .child(this.iconButton(t, `${id}-toggle`, ICON(done ? "check-filled" : "check"), this.tip(row),
         (cx) => this.toggle(row, cx), busy, done ? t.dim : null));

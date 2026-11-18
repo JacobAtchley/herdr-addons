@@ -256,6 +256,30 @@ def _latest(times):
     return max(times, key=parse_time) if times else None
 
 
+OPEN_THREAD = ("active", "pending")
+
+
+def thread_counts(threads, author):
+    """Feedback threads on a PR: comment threads (not system or vote threads) with a
+    comment by someone other than the PR's author. {"open": active or pending,
+    "resolved": every other status (fixed, closed, won't fix, by design)}."""
+    out = {"open": 0, "resolved": 0}
+    for t in threads:
+        if t.get("isDeleted") or (t.get("properties") or {}).get("CodeReviewThreadType"):
+            continue
+        if any(c.get("commentType") != "system" and not c.get("isDeleted")
+               and not _same(c.get("author"), author) for c in t.get("comments") or []):
+            out["open" if t.get("status") in OPEN_THREAD else "resolved"] += 1
+    return out
+
+
+def _same(a, b):
+    a, b = a or {}, b or {}
+    if a.get("id") and b.get("id"):
+        return a["id"] == b["id"]
+    return bool(a.get("uniqueName")) and (a.get("uniqueName") or "").lower() == (b.get("uniqueName") or "").lower()
+
+
 def _pr_detail(ado, who, p):
     """(newest push, newest non-system comment by anyone but him, his newest vote time,
     whether someone other than him or the author has voted or left a comment)."""
@@ -288,7 +312,7 @@ def _pr_detail(ado, who, p):
                 others = True
             if comment is None or parse_time(c["publishedDate"]) > parse_time(comment["publishedDate"]):
                 comment = c
-    return push, comment, _latest(vote_at), others
+    return push, comment, _latest(vote_at), others, thread_counts(threads, author)
 
 
 def group_matcher(ado, who, groups):
@@ -339,7 +363,7 @@ def pr_observations(ado, who, is_mine_group, now):
         if any(not x.get("isContainer") and x.get("vote", 0) != 0 and not _is_me(x, who)
                and x.get("id") != (p.get("createdBy") or {}).get("id") for x in p.get("reviewers") or []):
             return None
-        push, comment, vote_at, others = _pr_detail(ado, who, p)
+        push, comment, vote_at, others, counts = _pr_detail(ado, who, p)
         if others:
             return None
         vote = (personal or {}).get("vote", 0)
@@ -367,7 +391,8 @@ def pr_observations(ado, who, is_mine_group, now):
         return {"key": f"pr:{repo['id']}:{p['pullRequestId']}", "kind": "pr", "title": p.get("title"),
                 "sub": f"!{p['pullRequestId']} · {repo.get('name')} · {author}",
                 "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_git/{q(repo.get('name') or '')}/pullrequest/{p['pullRequestId']}",
-                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"], "vote": vote},
+                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"], "vote": vote,
+                        "threads": counts},
                 "event_at": iso(parse_time(best[0])), "event_text": best[1],
                 "action": "approve" if vote < 5 else "none"}
 
@@ -375,7 +400,6 @@ def pr_observations(ado, who, is_mine_group, now):
         return [o for o in pool.map(one, cands) if o]
 
 
-OPEN_THREAD = ("active", "pending")
 VOTE_TEXT = {-5: "wait for author", -10: "reject"}
 
 
@@ -431,7 +455,8 @@ def mine_observations(ado, who, now):
         return {"key": f"mine:{repo['id']}:{p['pullRequestId']}", "kind": "mine", "title": p.get("title"),
                 "sub": f"!{p['pullRequestId']} · {repo.get('name')} · your PR",
                 "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_git/{q(repo.get('name') or '')}/pullrequest/{p['pullRequestId']}",
-                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"]},
+                "ref": {"project": ado.project, "repoId": repo["id"], "id": p["pullRequestId"],
+                        "threads": thread_counts(threads, p.get("createdBy"))},
                 "event_at": iso(parse_time(at)), "event_text": " · ".join(parts), "action": "none"}
 
     with ThreadPoolExecutor(8) as pool:

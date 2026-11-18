@@ -134,8 +134,18 @@ class FetchPrTests(unittest.TestCase):
         self.assertEqual(o[0]["event_text"], "Cam Commenter commented")
         self.assertEqual(o[0]["action"], "approve")
         self.assertEqual(o[0]["sub"], "!5 · svc-a · Ann Author")
-        self.assertEqual(o[0]["ref"], {"project": "Proj", "repoId": "repo-1", "id": 5, "vote": 0})
+        self.assertEqual(o[0]["ref"], {"project": "Proj", "repoId": "repo-1", "id": 5, "vote": 0,
+                                       "threads": {"open": 0, "resolved": 0}})
         self.assertEqual(o[0]["kind"], "pr")
+
+    def test_pr_thread_counts_are_non_author_threads(self):
+        p = pr(reviewers=[reviewer(10)])
+        ado = FakeAdo(pr_routes(p, push=ts(hours=1), vote_threads=[("me-1", ts(hours=3))]))
+        ado.routes["/pullRequests/5/threads"]["value"] += [
+            thread("active", ("me-1", "Lee Lead", ts(hours=4))), thread("fixed", ("me-1", "Lee Lead", ts(hours=5))),
+            thread("active", ("au-1", "Ann Author", ts(hours=4)))]
+        o = feed.pr_observations(ado, ME, lambda r: False, NOW)
+        self.assertEqual(o[0]["ref"]["threads"], {"open": 1, "resolved": 1})
 
     def test_pr_opened_text_when_nothing_newer(self):
         o = run_pr(pr(reviewers=[reviewer(0)], created=ts(hours=1)))
@@ -260,7 +270,8 @@ class FetchMinePrTests(unittest.TestCase):
         self.assertEqual((x["key"], x["kind"], x["action"]), ("mine:repo-1:9", "mine", "none"))
         self.assertEqual(x["event_at"], ts(hours=1))
         self.assertEqual(x["event_text"], "Marc Reviewer commented · 2 open threads")
-        self.assertEqual(x["ref"], {"project": "Proj", "repoId": "repo-1", "id": 9})
+        self.assertEqual(x["ref"], {"project": "Proj", "repoId": "repo-1", "id": 9,
+                                    "threads": {"open": 2, "resolved": 0}})
         self.assertEqual(x["sub"], "!9 · svc-a · your PR")
         self.assertTrue(any("creatorId=me-1" in c[1] for c in ado.calls))
 
@@ -295,6 +306,12 @@ class FetchMinePrTests(unittest.TestCase):
                         vote_threads=[("m-1", "Marc Reviewer", ts(hours=3))])
         self.assertEqual(o[0]["event_text"], "Cam Commenter commented · 1 open thread · Marc Reviewer voted wait for author")
         self.assertEqual(o[0]["event_at"], ts(hours=1))
+
+    def test_thread_counts_open_and_resolved(self):
+        o, _ = run_mine(my_pr(), [thread("active", (*MARC, ts(hours=1))), thread("fixed", (*MARC, ts(hours=2))),
+                                  thread("closed", (*MARC, ts(hours=2))), thread("active", ("me-1", "Lee Lead", ts(hours=1))),
+                                  thread("active", (*MARC, ts(hours=1)), system_type="PolicyStatusUpdate")])
+        self.assertEqual(o[0]["ref"]["threads"], {"open": 1, "resolved": 2})
 
     def test_completed_pr_absent(self):
         # the query asks for active PRs only; a non-active one slipping through is skipped
