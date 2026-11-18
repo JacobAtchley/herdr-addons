@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "mods", "
 import feed  # noqa: E402
 
 NOW = datetime(2026, 11, 16, 12, 0, 0, tzinfo=timezone.utc)
-ALL = {"pr", "build", "wi"}
+ALL = {"pr", "build", "wi", "mine"}
 
 
 def obs(key, kind="pr", event_at="2026-11-16T10:00:00Z", **kw):
@@ -199,6 +199,8 @@ class EngineTest(unittest.TestCase):
                          {"title": "3 new in ADO", "body": "2 PRs to review · 1 failed build"})
         self.assertEqual(feed.summary([obs("w", kind="wi")]),
                          {"title": "1 new in ADO", "body": "1 item assigned to you"})
+        self.assertEqual(feed.summary([obs("m", kind="mine"), obs("p")]),
+                         {"title": "2 new in ADO", "body": "1 PR to review · 1 PR with feedback"})
         self.assertIsNone(feed.summary([]))
 
 

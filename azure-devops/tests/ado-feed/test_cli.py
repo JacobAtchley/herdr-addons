@@ -62,7 +62,7 @@ class CliBase(unittest.TestCase):
         self.home = self.tmp.name
         self.write_settings(SETTINGS)
         self.ado = FakeAdo()
-        self.pr, self.build, self.wi = [], [], []
+        self.pr, self.build, self.wi, self.mine = [], [], [], []
         self.build_exc = None
 
         def build_fn(ado, now):
@@ -77,7 +77,8 @@ class CliBase(unittest.TestCase):
                                     lambda ado, types: {t: {"Pending QA": "Resolved", "Closed": "Completed"} for t in types}),
                   mock.patch.object(feed, "pr_observations", lambda ado, who, groups, now: list(self.pr)),
                   mock.patch.object(feed, "build_observations", build_fn),
-                  mock.patch.object(feed, "wi_observations", lambda ado, who, now: list(self.wi))):
+                  mock.patch.object(feed, "wi_observations", lambda ado, who, now: list(self.wi)),
+                  mock.patch.object(feed, "mine_observations", lambda ado, who, now: list(self.mine))):
             p.start()
             self.addCleanup(p.stop)
 

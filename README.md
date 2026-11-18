@@ -11,7 +11,7 @@ agent can rebuild it from), a `preview.png`, its mods, and its keys.
 
 | Addon | Key | What it does |
 |---|---|---|
-| [**azure-devops**](azure-devops/RECIPE.md) | `⌘⇧R` `⌘⇧B` `⌘⇧I` `⌘⇧Y` `⌘⇧F` | Pull requests, pipelines (with logs), work items (with an editable details view), a team standup and a feed of what needs a team lead (PRs to review, failed builds, newly assigned items, with popups and a count), for every project in your Azure DevOps org. An ADO dropdown in the tab bar opens them. |
+| [**azure-devops**](azure-devops/RECIPE.md) | `⌘⇧R` `⌘⇧B` `⌘⇧I` `⌘⇧Y` `⌘⇧F` | Pull requests, pipelines (with logs), work items (with an editable details view), a team standup and a feed of what needs a team lead (PRs to review, feedback on your PRs, failed builds, newly assigned items, with popups and a count), for every project in your Azure DevOps org. An ADO dropdown in the tab bar opens them. |
 | [**datadog**](datadog/RECIPE.md) | `⌘⇧E` | What needs attention in one Datadog env: triggered monitors, Error Tracking issues, clustered error logs, APM error spans. |
 | [**cc-usage**](cc-usage/RECIPE.md) | `⌘⇧U` | Claude Code usage like ccusage: cost and tokens by day, model, repo, branch and session, the live 5-hour block, and your plan limits. |
 | [**orchestrator**](orchestrator/RECIPE.md) | — | Inbox for a local agent-orchestrator daemon: sessions, plan and permission approvals, PR review queue, plus a sidebar list. Needs an orchestrator API at `orchestrator.url`. |

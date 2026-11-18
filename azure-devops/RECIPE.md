@@ -244,7 +244,7 @@ lead, newest first. Header: icon and "Feed" with `project · team`, time pills
 (24 hours, 48 hours, 1 week), a "Show resolved" toggle, "updated Nm ago",
 refresh, dock as pane and close. Each row has a lead bar by kind, the title, a
 sub-line saying what happened, the time ago, and a round check toggle on the
-right whose tooltip names the action. Clicking a row opens the item as a stacked
+right whose tooltip names the action. PR rows (to review and your own) also show a pill such as "2 open · 3 resolved": comment threads in which someone other than the PR's author has commented, active or pending against every other status. Clicking a row opens the item as a stacked
 dialog: a PR in the `ado-prs` review (`returnTo: "Feed"`), a build's latest
 failed run in `ado-pipelines`, a work item in the `ado-workitems` detail. The
 team is `ado.feed.team`, else `ado.standup.team`, in `ado.standup.project`. A
@@ -252,9 +252,10 @@ red-tinted banner says which kind didn't load.
 
 | Kind | Appears when | Reappears when | Auto-resolves when |
 |---|---|---|---|
-| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | You voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
+| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, nobody but you and the author has voted (any vote, or a vote thread even if a push reset it) or left a non-system comment, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | Someone other than you and the author voted or commented; or you voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
+| Your PR with feedback | Your own active PR has a comment thread, still active or pending, in which someone other than you has commented, or a wait-for-author or reject vote from someone else. The time is their latest such comment or vote; the row reads "Marcus Carey commented · 2 open threads". Approvals alone add nothing. Opens in the `ado-prs` review like a PR to review; the toggle changes nothing in ADO | Newer feedback after you resolved it | Every such thread is resolved (fixed, closed, won't fix, by design) and no wait/reject vote remains; or the PR completed or was abandoned |
 | Build | A failed or partially succeeded run on any pipeline in the project in the last 14 days (`BUILD_DAYS`, up to 5000 runs per fetch), one item per pipeline + branch ("failed 3x, latest 10m ago"). Narrowing this to the team's repos is a possible change | A newer failed run on that pipeline + branch | A newer successful run on that pipeline + branch |
-| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment | Assigned to you again after being resolved | No longer assigned to you, or Completed/Removed |
+| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment. Items in Code Review or Pending QA (`WI_HIDDEN_STATES`) are never shown | Assigned to you again after being resolved, or moved back out of Code Review or Pending QA | No longer assigned to you, Completed/Removed, or moved to Code Review or Pending QA |
 
 - **Windows:** 24 and 48 hours show items whose event time falls in the window;
   an unresolved item also shows from when the feed first saw it (for example
@@ -262,9 +263,9 @@ red-tinted banner says which kind didn't load.
   1 week shows every unresolved item, however old, plus anything from the last
   week. Show resolved adds resolved ones in the same window.
 - **Resolve actions:** the database changes only after ADO confirms. A PR
-  below vote 5 gets your approve (10), and an existing 5 or 10 is left alone. A
-  work item in Pending QA is set to its type's Completed state, normally Closed.
-  Builds and other work items change nothing in ADO. A failed call shows an
+  below vote 5 gets your approve (10), and an existing 5 or 10 is left alone.
+  Builds and work items change nothing in ADO (Pending QA items, which used to
+  be closed here, are no longer shown). A failed call shows an
   error and leaves the row open. Resolved rows are dimmed, and their toggle
   reopens them (`unresolve`, database only: a vote or closed state stays).
 - **A kind whose fetch fails** never auto-resolves its rows, and a sync that
@@ -275,11 +276,11 @@ red-tinted banner says which kind didn't load.
 - **Database:** `<herdr home>/ado-feed.db` (SQLite). Resolved rows are deleted
   after 30 days.
 - **Notifying:** my-tabs runs `feed.py sync --notify` every 3 min. The first
-  successful sync of each kind (PRs, builds, work items) is silent: everything
+  successful sync of each kind (PRs to review, your PRs with feedback, builds, work items) is silent: everything
   found is shown and counted, with no popup. A kind that failed on the first
   sync stays silent until its own first success. After
   that each item gets at most one popup ("3 new in ADO", "2 PRs to review ·
-  1 failed build"), and the ADO button shows a count of unresolved items. The
+  1 PR with feedback"), and the ADO button shows a count of unresolved items. The
   open Feed syncs when it opens and every 2 min, without notifying.
 
 ## How it behaves

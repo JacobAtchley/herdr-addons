@@ -1,7 +1,8 @@
 // Feed: what needs a team lead's attention, from Azure DevOps.
-//   PRs waiting on his approval, failing builds, work items newly assigned or
-//   in Pending QA. Each row has a toggle that resolves it (approving the PR or
-//   closing the item when that applies). Data and state come from feed.py,
+//   PRs waiting on his approval that nobody else has reviewed or commented on,
+//   his own PRs with feedback still to address, failing builds, and work items newly assigned to him (not in Code Review or
+//   Pending QA). Each row has a toggle that resolves it (approving the PR when
+//   that applies). Data and state come from feed.py,
 //   which keeps a local database; this view only lists, syncs and toggles.
 //
 // Opens as a dialog (mod.open:ado-feed, cmd-shift-f), or as a pane.
@@ -12,7 +13,7 @@ import { exec, theme, props, closeOverlay, openOverlay, run, notify, appHome, se
 
 const SYNC_MS = 120000;
 const ICON = (n) => `mods/ado-feed/${n}.svg`;
-const KIND_COLOR = { pr: "#9085e9", build: "#d03b3b", wi: "#3987e5" };
+const KIND_COLOR = { pr: "#9085e9", mine: "#e0a030", build: "#d03b3b", wi: "#3987e5" };
 const S = { critical: "#d03b3b" };
 const MARKER = "@@ADO-FEED@@\n";
 const WINDOWS = [
@@ -143,7 +144,7 @@ export default class Feed extends View {
   // arrow and Esc return here.
   openRow(row) {
     const ref = row.ref ?? {};
-    if (row.kind === "pr" && ref.repoId) {
+    if ((row.kind === "pr" || row.kind === "mine") && ref.repoId) {
       openOverlay({
         mod: "ado-prs", kind: "dialog", width: 0.94, height: 0.92,
         props: { review: { project: ref.project, repoId: ref.repoId, id: ref.id, returnTo: "Feed" } },
@@ -190,6 +191,17 @@ export default class Feed extends View {
     return "Resolve";
   }
 
+  // PR rows: feedback threads still open against those resolved.
+  threads(t, id, row) {
+    const n = row.ref.threads;
+    const label = (k, v) => `${v} ${k}`;
+    return h_flex().id(`${id}-threads`).flex_none().gap(6).px(7).py(2).rounded(10).bg(t.background)
+      .tooltip(`Comment threads: ${n.open} open, ${n.resolved} resolved`)
+      .child(div().text_size(11).text_color(n.open > 0 ? "#e0a030" : t.dim).child(label("open", n.open)))
+      .child(div().text_size(11).text_color(t.dim).child("·"))
+      .child(div().text_size(11).text_color(n.resolved > 0 ? "#3fa66b" : t.dim).child(label("resolved", n.resolved)));
+  }
+
   row(t, row) {
     const id = `row-${row.key.replace(/[^A-Za-z0-9]/g, "-")}`;
     const done = Boolean(row.resolved_at);
@@ -206,6 +218,7 @@ export default class Feed extends View {
       .child(v_flex().flex_1().min_w(0)
         .child(div().truncate().text_size(12.5).child(row.title ?? ""))
         .child(div().truncate().text_size(11).text_color(t.dim).child(sub)))
+      .when(Boolean(row.ref?.threads), (el) => el.child(this.threads(t, id, row)))
       .child(div().flex_none().text_size(11.5).text_color(t.muted).child(right))
       .child(this.iconButton(t, `${id}-toggle`, ICON(done ? "check-filled" : "check"), this.tip(row),
         (cx) => this.toggle(row, cx), busy, done ? t.dim : null));
