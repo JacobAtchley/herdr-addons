@@ -1,7 +1,8 @@
 // Feed: what needs a team lead's attention, from Azure DevOps.
-//   PRs waiting on his approval, failing builds, work items newly assigned or
-//   in Pending QA. Each row has a toggle that resolves it (approving the PR or
-//   closing the item when that applies). Data and state come from feed.py,
+//   PRs waiting on his approval that nobody else has reviewed or commented on,
+//   failing builds, and work items newly assigned to him (not in Code Review or
+//   Pending QA). Each row has a toggle that resolves it (approving the PR when
+//   that applies). Data and state come from feed.py,
 //   which keeps a local database; this view only lists, syncs and toggles.
 //
 // Opens as a dialog (mod.open:ado-feed, cmd-shift-f), or as a pane.

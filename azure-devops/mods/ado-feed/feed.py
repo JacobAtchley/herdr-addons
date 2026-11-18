@@ -232,6 +232,8 @@ q = standup.q
 
 BUILD_DAYS = 14
 WI_ASSIGNED_DAYS = 14
+# items already handed on to review or QA; never shown (an open row auto-resolves)
+WI_HIDDEN_STATES = {"code review", "pending qa"}
 
 
 def me(ado):
@@ -254,11 +256,18 @@ def _latest(times):
 
 
 def _pr_detail(ado, who, p):
+    """(newest push, newest non-system comment by anyone but him, his newest vote time,
+    whether someone other than him or the author has voted or left a comment)."""
+    author = p.get("createdBy") or {}
+
+    def other(ident):
+        ident = ident or {}
+        return not _is_me(ident, who) and not (ident.get("id") and ident.get("id") == author.get("id"))
     base = f"/{q(ado.project)}/_apis/git/repositories/{p['repository']['id']}/pullRequests/{p['pullRequestId']}"
     its = ado.get(f"{base}/iterations?api-version=7.1").get("value", [])
     threads = ado.get(f"{base}/threads?api-version=7.1").get("value", [])
     push = max(its, key=lambda i: parse_time(i["createdDate"])) if its else None
-    comment, vote_at = None, []
+    comment, vote_at, others = None, [], False
     for t in threads:
         props = t.get("properties") or {}
         if (props.get("CodeReviewThreadType") or {}).get("$value") == "VoteUpdate":
@@ -267,14 +276,18 @@ def _pr_detail(ado, who, p):
             voter = (t.get("identities") or {}).get(v) or {}
             if v == who["id"] or _is_me(voter, who):
                 vote_at += [c.get("publishedDate") for c in t.get("comments") or []] or [t.get("publishedDate")]
+            elif v != who["id"] and other(voter or {"id": v}):
+                others = True
             continue
         for c in t.get("comments") or []:
             a = c.get("author") or {}
             if c.get("commentType") == "system" or a.get("id") == who["id"] or not c.get("publishedDate"):
                 continue
+            if other(a):
+                others = True
             if comment is None or parse_time(c["publishedDate"]) > parse_time(comment["publishedDate"]):
                 comment = c
-    return push, comment, _latest(vote_at)
+    return push, comment, _latest(vote_at), others
 
 
 def group_matcher(ado, who, groups):
@@ -321,7 +334,13 @@ def pr_observations(ado, who, is_mine_group, now):
 
     def one(c):
         p, personal, mine = c
-        push, comment, vote_at = _pr_detail(ado, who, p)
+        # someone else already reviewed or commented: it is in hand, not his to chase
+        if any(not x.get("isContainer") and x.get("vote", 0) != 0 and not _is_me(x, who)
+               and x.get("id") != (p.get("createdBy") or {}).get("id") for x in p.get("reviewers") or []):
+            return None
+        push, comment, vote_at, others = _pr_detail(ado, who, p)
+        if others:
+            return None
         vote = (personal or {}).get("vote", 0)
         push_at = push["createdDate"] if push else None
         comment_at = comment["publishedDate"] if comment else None
@@ -410,7 +429,8 @@ def wi_observations(ado, who, now):
             "System.CreatedDate", "System.CreatedBy"]}).get("value", [])
     cats = standup.state_categories(ado, sorted({(w["fields"].get("System.WorkItemType")) for w in items} - {None}))
     live = [w for w in items if cats.get(w["fields"].get("System.WorkItemType"), {}).get(w["fields"].get("System.State"))
-            not in ("Completed", "Removed")]
+            not in ("Completed", "Removed")
+            and (w["fields"].get("System.State") or "").lower() not in WI_HIDDEN_STATES]
     cutoff = now - timedelta(days=WI_ASSIGNED_DAYS)
 
     def one(w):
@@ -440,8 +460,7 @@ def wi_observations(ado, who, now):
              "sub": f"#{w['id']} · {typ} · {state}",
              "url": f"https://dev.azure.com/{ado.org}/{q(ado.project)}/_workitems/edit/{w['id']}",
              "ref": {"project": ado.project, "id": w["id"], "state": state, "type": typ},
-             "event_at": iso(parse_time(at)), "event_text": text,
-             "action": "close" if state == "Pending QA" else "none"}
+             "event_at": iso(parse_time(at)), "event_text": text, "action": "none"}
         if parse_time(at) < cutoff:
             o["appear"] = False
         return o

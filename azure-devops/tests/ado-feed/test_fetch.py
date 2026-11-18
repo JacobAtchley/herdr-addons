@@ -127,7 +127,7 @@ class FetchPrTests(unittest.TestCase):
 
     def test_pr_personal_reviewer_no_vote_appears(self):
         p = pr(reviewers=[reviewer(0)], created=ts(hours=10))
-        o = run_pr(p, push=ts(hours=5), comments=[("c-1", ts(hours=2), False)])
+        o = run_pr(p, push=ts(hours=5), comments=[("au-1", ts(hours=2), False)])
         self.assertEqual(len(o), 1)
         self.assertEqual(o[0]["key"], "pr:repo-1:5")
         self.assertEqual(o[0]["event_at"], ts(hours=2))
@@ -191,10 +191,29 @@ class FetchPrTests(unittest.TestCase):
     def test_pr_draft_is_absent(self):
         self.assertEqual(run_pr(pr(reviewers=[reviewer(0)], draft=True)), [])
 
-    def test_vote_thread_by_other_voter_ignored(self):
-        p = pr(reviewers=[reviewer(10)])
-        o = run_pr(p, push=ts(hours=1), vote_threads=[("other-9", ts(hours=0.5))])
+    def test_pr_other_reviewer_vote_thread_hides(self):
+        # someone else reviewed (even if a push since reset their vote to 0)
+        p = pr(reviewers=[reviewer(0)])
+        self.assertEqual(run_pr(p, push=ts(hours=1), vote_threads=[("other-9", ts(hours=0.5))]), [])
+
+    def test_pr_other_reviewer_vote_hides(self):
+        other = lambda v: reviewer(v, id="x-1", mail="x@example.test", name="Xi Other")
+        for v in (10, 5, -5, -10):
+            self.assertEqual(run_pr(pr(reviewers=[reviewer(0), other(v)])), [], v)
+        self.assertEqual(len(run_pr(pr(reviewers=[reviewer(0), other(0)]))), 1)
+
+    def test_pr_other_comment_hides(self):
+        self.assertEqual(run_pr(pr(reviewers=[reviewer(0)]), comments=[("c-1", ts(hours=1), False)]), [])
+        grp = reviewer(0, id="g-1", mail="", group=True, name="[Proj]\\Platform-Devs")
+        self.assertEqual(run_pr(pr(reviewers=[grp]), groups={"platform-devs"},
+                                comments=[("c-1", ts(hours=1), False)]), [])
+
+    def test_pr_author_and_system_comments_do_not_hide(self):
+        o = run_pr(pr(reviewers=[reviewer(0)]), comments=[("au-1", ts(hours=1), False), ("c-1", ts(hours=1), True)])
         self.assertEqual(len(o), 1)
+
+    def test_pr_author_vote_thread_does_not_hide(self):
+        self.assertEqual(len(run_pr(pr(reviewers=[reviewer(0)]), vote_threads=[("au-1", ts(hours=1))])), 1)
 
     def test_own_comments_do_not_count(self):
         p = pr(reviewers=[reviewer(10)])
@@ -303,9 +322,9 @@ class FetchWorkItemTests(unittest.TestCase):
         self.assertEqual(o[0]["event_at"], ts(days=20))
         self.assertIs(o[0]["appear"], False)
 
-    def test_wi_pending_qa_action_close(self):
-        o = run_wi([wi(12, state="Pending QA")], {12: [upd(ts(days=1))]})
-        self.assertEqual(o[0]["action"], "close")
+    def test_wi_code_review_and_pending_qa_dropped(self):
+        for st in ("Code Review", "Pending QA", "pending qa"):
+            self.assertEqual(run_wi([wi(12, state=st)], {12: [upd(ts(days=1))]}), [], st)
 
     def test_wi_completed_dropped(self):
         self.assertEqual(run_wi([wi(13, state="Closed")], {13: [upd(ts(days=1))]}), [])

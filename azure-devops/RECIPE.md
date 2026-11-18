@@ -252,9 +252,9 @@ red-tinted banner says which kind didn't load.
 
 | Kind | Appears when | Reappears when | Auto-resolves when |
 |---|---|---|---|
-| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | You voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
+| PR | Active, not a draft, not opened by you, no approval yet from you or your team's group, nobody but you and the author has voted (any vote, or a vote thread even if a push reset it) or left a non-system comment, and you are a reviewer: by name, through a group you are a direct member of (identities API), or a group named like the team's groups or the team. If a group membership lookup fails, the whole PR kind fails for that sync (its rows stay) | A push or a comment by someone else, later than your vote or resolution | Someone other than you and the author voted or commented; or you voted after the latest push or comment; or, when you are on it only through a group, that group's vote is 5 or more; or the PR completed or was abandoned |
 | Build | A failed or partially succeeded run on any pipeline in the project in the last 14 days (`BUILD_DAYS`, up to 5000 runs per fetch), one item per pipeline + branch ("failed 3x, latest 10m ago"). Narrowing this to the team's repos is a possible change | A newer failed run on that pipeline + branch | A newer successful run on that pipeline + branch |
-| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment | Assigned to you again after being resolved | No longer assigned to you, or Completed/Removed |
+| Work item | Assigned to you by someone else within the last 14 days (`WI_ASSIGNED_DAYS`); the time is the assignment update's `System.ChangedDate`. Items you assigned to yourself are skipped. An item stays while it is assigned to you and not Completed/Removed, however old the assignment. Items in Code Review or Pending QA (`WI_HIDDEN_STATES`) are never shown | Assigned to you again after being resolved, or moved back out of Code Review or Pending QA | No longer assigned to you, Completed/Removed, or moved to Code Review or Pending QA |
 
 - **Windows:** 24 and 48 hours show items whose event time falls in the window;
   an unresolved item also shows from when the feed first saw it (for example
@@ -262,9 +262,9 @@ red-tinted banner says which kind didn't load.
   1 week shows every unresolved item, however old, plus anything from the last
   week. Show resolved adds resolved ones in the same window.
 - **Resolve actions:** the database changes only after ADO confirms. A PR
-  below vote 5 gets your approve (10), and an existing 5 or 10 is left alone. A
-  work item in Pending QA is set to its type's Completed state, normally Closed.
-  Builds and other work items change nothing in ADO. A failed call shows an
+  below vote 5 gets your approve (10), and an existing 5 or 10 is left alone.
+  Builds and work items change nothing in ADO (Pending QA items, which used to
+  be closed here, are no longer shown). A failed call shows an
   error and leaves the row open. Resolved rows are dimmed, and their toggle
   reopens them (`unresolve`, database only: a vote or closed state stays).
 - **A kind whose fetch fails** never auto-resolves its rows, and a sync that
