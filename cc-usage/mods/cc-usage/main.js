@@ -65,6 +65,39 @@ function when(ts) {
 }
 const tokens = (v) => v[1] + v[2] + v[3] + v[4];
 
+// ---- sortable tables
+// A column: { key, label, num (numbers sort largest first on the first click), get(row) }.
+const SESSION_COLS = [
+  { key: "end", label: "Last active", num: true, get: (s) => s.end },
+  { key: "repo", label: "Repo · branch", get: (s) => `${s.repo} ${s.branch || s.folder}` },
+  { key: "model", label: "Model", get: (s) => s.model },
+  { key: "length", label: "Length", num: true, get: (s) => s.end - s.start },
+  { key: "cost", label: "Cost", num: true, get: (s) => s.cost },
+  { key: "tokens", label: "Tokens", num: true, get: (s) => s.tokens },
+];
+const PROJECT_COLS = [
+  { key: "name", label: "", get: (x) => x.g.label },
+  { key: "cost", label: "Cost", num: true, get: (x) => x.v[0] },
+  { key: "tokens", label: "Tokens", num: true, get: (x) => tokens(x.v) },
+  { key: "msgs", label: "Msgs", num: true, get: (x) => x.v[5] },
+  { key: "last", label: "Last", num: true, get: (x) => x.g.last ?? 0 },
+];
+function sortBy(list, cols, sort) {
+  const col = cols.find((c) => c.key === sort.key) ?? cols[0];
+  const dir = sort.dir === "asc" ? 1 : -1;
+  const cmp = col.num
+    ? (a, b) => (col.get(a) - col.get(b)) * dir
+    : (a, b) => String(col.get(a)).localeCompare(String(col.get(b)), undefined, { sensitivity: "base" }) * dir;
+  return [...list].sort(cmp);
+}
+function loadSort(name, fallback) {
+  try {
+    const s = JSON.parse(localStorage.getItem(name) ?? "null");
+    if (s?.key && (s.dir === "asc" || s.dir === "desc")) return s;
+  } catch {}
+  return fallback;
+}
+
 // ---- data
 
 function dayRange(days, first) {
@@ -97,6 +130,8 @@ export default class CcUsage extends View {
     this.tab = p.tab ?? localStorage.getItem("tab") ?? "Overview";
     this.range = localStorage.getItem("range") ?? "30";
     this.group = localStorage.getItem("group") ?? "repo";
+    this.sessionSort = loadSort("sessionSort", { key: "end", dir: "desc" });
+    this.projectSort = loadSort("projectSort", { key: "cost", dir: "desc" });
     this.open = {}; // expanded repo rows
     this.repoFilter = p.repo ?? null; // sessions filtered to a repo label
     if (p.range) this.range = String(p.range);
@@ -274,6 +309,29 @@ export default class CcUsage extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click(onClick)
       .child(ic);
+  }
+
+  // A clickable column header: first click sorts (numbers largest first,
+  // text A→Z), the next click flips it. The sorted column shows an arrow.
+  th(t, field, cols, key, cell, label) {
+    const col = cols.find((c) => c.key === key);
+    const sort = this[field];
+    const active = sort.key === key;
+    const arrow = active ? (sort.dir === "desc" ? " ▾" : " ▴") : "";
+    return cell
+      .id(`th-${field}-${key}`)
+      .cursor_pointer()
+      .rounded(4)
+      .text_color(active ? t.foreground : t.dim)
+      .hover((s) => s.text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => {
+        const dir = active ? (sort.dir === "desc" ? "asc" : "desc") : col.num ? "desc" : "asc";
+        this[field] = { key, dir };
+        localStorage.setItem(field, JSON.stringify(this[field]));
+        cx.notify();
+      })
+      .child(`${label ?? col.label}${arrow}`);
   }
 
   card(t, title, body, { flex = 1, right } = {}) {
@@ -532,18 +590,20 @@ export default class CcUsage extends View {
 
   projects(t, keys) {
     const r = this.report;
-    const list = r[this.group].map((g) => ({ g, v: sum(g.days, keys) })).filter((x) => x.v[5] > 0).sort((a, b) => b.v[0] - a.v[0]);
+    const all = r[this.group].map((g) => ({ g, v: sum(g.days, keys) })).filter((x) => x.v[5] > 0);
+    const list = sortBy(all, PROJECT_COLS, this.projectSort);
     const total = sum(r.days, keys);
-    const maxCost = list[0]?.v[0] ?? 0;
+    const maxCost = Math.max(0, ...list.map((x) => x.v[0]));
+    const th = (key, cell, label) => this.th(t, "projectSort", PROJECT_COLS, key, cell, label);
     const head = h_flex().gap(12).px(12).py(6).text_size(11).text_color(t.dim).border_b(1).border_color(t.border)
       .child(div().w(14).flex_none())
-      .child(div().flex_1().min_w(120).child(GROUPS.find((x) => x.key === this.group).label))
+      .child(th("name", div().flex_1().min_w(120), GROUPS.find((x) => x.key === this.group).label))
       .child(div().w(120).flex_none().child("Share"))
-      .child(div().w(72).flex_none().text_right().child("Cost"))
-      .child(div().w(70).flex_none().text_right().child("Tokens"))
-      .child(div().w(56).flex_none().text_right().child("Msgs"))
+      .child(th("cost", div().w(72).flex_none().text_right()))
+      .child(th("tokens", div().w(70).flex_none().text_right()))
+      .child(th("msgs", div().w(56).flex_none().text_right()))
       .when(this.width >= 760, (el) => el.child(div().w(84).flex_none().child("14 days")))
-      .when(this.width >= 860, (el) => el.child(div().w(64).flex_none().text_right().child("Last")));
+      .when(this.width >= 860, (el) => el.child(th("last", div().w(64).flex_none().text_right())));
 
     const rows = [];
     for (const { g, v } of list) {
@@ -626,16 +686,18 @@ export default class CcUsage extends View {
     let list = this.report.sessions.filter((s) => dayKey(new Date(s.end * 1000)) >= from);
     if (this.repoFilter) list = list.filter((s) => s.repo === this.repoFilter);
     const count = list.length;
-    list = list.slice(0, 150);
+    // Sort everything in range first, so "top 150 by cost" is really the top 150.
+    list = sortBy(list, SESSION_COLS, this.sessionSort).slice(0, 150);
     const max = Math.max(1e-9, ...list.map((s) => s.cost));
     const blue = series(settings().dark !== false)[0];
+    const th = (key, cell) => this.th(t, "sessionSort", SESSION_COLS, key, cell);
     const head = h_flex().gap(12).px(12).py(6).text_size(11).text_color(t.dim).border_b(1).border_color(t.border)
-      .child(div().w(96).flex_none().child("Last active"))
-      .child(div().flex_1().min_w(140).child("Repo · branch"))
-      .child(div().w(110).flex_none().child("Model"))
-      .child(div().w(64).flex_none().text_right().child("Length"))
-      .child(div().w(72).flex_none().text_right().child("Cost"))
-      .child(div().w(70).flex_none().text_right().child("Tokens"))
+      .child(th("end", div().w(96).flex_none()))
+      .child(th("repo", div().flex_1().min_w(140)))
+      .child(th("model", div().w(110).flex_none()))
+      .child(th("length", div().w(64).flex_none().text_right()))
+      .child(th("cost", div().w(72).flex_none().text_right()))
+      .child(th("tokens", div().w(70).flex_none().text_right()))
       .child(div().w(60).flex_none());
     const rows = list.map((s) =>
       h_flex().id(`s-${s.id}`).gap(12).items_center().px(12).py(7).border_b(1).border_color(alpha(t.border, 0.6))
@@ -664,7 +726,7 @@ export default class CcUsage extends View {
           .child("Resume")));
     return v_flex().gap(12)
       .child(h_flex().gap(10).items_center()
-        .child(div().text_size(12).text_color(t.muted).child(count > list.length ? `${count} sessions · newest ${list.length} shown` : `${count} sessions`))
+        .child(div().text_size(12).text_color(t.muted).child(count > list.length ? `${count} sessions · first ${list.length} shown` : `${count} sessions`))
         .when(Boolean(this.repoFilter), (el) => el.child(
           h_flex().id("clear-filter").gap(6).px(8).py(2).rounded(6).bg(t.raised).cursor_pointer().items_center()
             .hover((s) => s.bg(t.hover))

@@ -80,7 +80,15 @@ a 70px daily chart (up to 60 days), its top 8 folders / worktrees (relative to
 the repo as "./sub", or "⎇ name" for a worktree elsewhere) and top 8 branches,
 and "Sessions in <repo> →".
 
-**Sessions**: "N sessions" (or "N sessions · newest 150 shown"), an optional
+**Sortable headers** (Projects and Sessions): clicking a column header sorts
+by it; clicking it again flips the direction. Numbers sort largest first on
+the first click, text A→Z. The sorted header is `foreground` with ▾ (desc) or
+▴ (asc); the others are `dim` and turn `foreground` on hover. Projects sorts by
+name, Cost, Tokens, Msgs or Last (default Cost ▾; Share and 14 days aren't
+sortable). Sessions sorts by any column but Resume (default Last active ▾).
+Each table's choice is kept in `localStorage` (`projectSort`, `sessionSort`).
+
+**Sessions**: "N sessions" (or "N sessions · first 150 shown", after sorting all of them), an optional
 repo filter chip with ✕, and a table: Last active (96px, "Nov 6 14:05"),
 repo with branch (or folder) under it, model with an 8px color square,
 length ("1h 05m"), cost with a 3px bar, tokens, and "Resume" in `accent`.
