@@ -68,15 +68,16 @@ Press `⌘⇧E`, or pick it from a small Datadog dropdown in the tab bar.
   - Link buttons are 11.5px `accent` text with a 1px `border` and radius 5.
 - **Empty tab**: "✓ No monitors alerting in env:prod." centered, 12.5px,
   in `ansi2`.
-- **No keys**: a centered "Connect Datadog" card, at most 620px wide. It says
-  which env vars are missing and shows the `export DD_API_KEY=…` /
-  `DD_APP_KEY` / `DD_SITE` lines to add to `~/.zshenv`. It names the
-  Application key scopes needed (`monitors_read`, `error_tracking_read`,
-  `logs_read_data`, `apm_read`) and has an "Open API keys page" button.
+- **No credentials**: a centered "Connect Datadog" card, at most 620px wide.
+  It says which env var is missing and shows the `export DATADOG_PAT=…` /
+  `DATADOG_SITE` lines to add to `~/.zshenv`. It names the token scopes
+  needed (`monitors_read`, `error_tracking_read`, `logs_read_data`,
+  `apm_read`), notes that `DD_API_KEY` + `DD_APP_KEY` still work as a
+  fallback, and has an "Open personal settings" button.
 - **Errors**: if all four calls fail with 401 or 403, the panel says
-  "Datadog rejected the keys" and shows the site. If one section fails, its
+  "Datadog rejected the token" and shows the site. If one section fails, its
   tab shows "Couldn't load X", the API error, and "A 403 usually means the
-  Application key lacks that scope." If the helper itself fails, the panel
+  token lacks that scope." If the helper itself fails, the panel
   says "Couldn't run the Datadog helper". All of these headings are 13px
   `blocked`.
 - **Dropdown (`dd-menu`)**: a 300×62 popup opened from a "Datadog" button in
@@ -125,10 +126,13 @@ Press `⌘⇧E`, or pick it from a small Datadog dropdown in the tab bar.
     `main.js` parses whatever comes after the last marker.
   - Icons: `datadog.svg`, `refresh.svg`, `panel-right.svg`, `x.svg`, all
     24×24 using `currentColor`.
-- **`dd.py`** reads `DD_API_KEY` (or `DATADOG_API_KEY`) and `DD_APP_KEY` (or
-  `DD_APPLICATION_KEY` / `DATADOG_APP_KEY`), plus `DD_SITE` (default
-  `datadoghq.com`). It calls `https://api.<site>` with `DD-API-KEY` /
-  `DD-APPLICATION-KEY` headers, with a 25 s timeout per call. It runs four
+- **`dd.py`** reads a Personal Access Token from `DATADOG_PAT` (or `DD_PAT`)
+  and sends it as `Authorization: Bearer <token>`; Datadog rejects a PAT in
+  the `DD-API-KEY` header. Without a PAT it falls back to `DD_API_KEY` (or
+  `DATADOG_API_KEY`) and `DD_APP_KEY` (or `DD_APPLICATION_KEY` /
+  `DATADOG_APP_KEY`) sent as `DD-API-KEY` / `DD-APPLICATION-KEY` headers. The
+  site comes from `DD_SITE` or `DATADOG_SITE` (default `datadoghq.com`). It
+  calls `https://api.<site>` with a 25 s timeout per call. It runs four
   jobs in parallel:
   - **monitors**: `GET /api/v1/monitor?group_states=alert,warn,no data&with_downtimes=true`,
     500 per page, at most 10 pages. It keeps Alert, Warn and No Data. A
@@ -193,7 +197,7 @@ Press `⌘⇧E`, or pick it from a small Datadog dropdown in the tab bar.
   only, so "first in sample" is not the real first time), 100 APM rows, 20
   groups per monitor (12 shown when open), messages cut at 400 characters,
   stack traces at 4000.
-- "Datadog rejected the keys" appears only when all four calls fail with
+- "Datadog rejected the token" appears only when all four calls fail with
   401 or 403. If only some fail, each of those tabs shows its own error.
 - If you add rows to `dd-menu`, make the popup height in `my-tabs` 52px per
   row plus 10.
@@ -203,8 +207,8 @@ Press `⌘⇧E`, or pick it from a small Datadog dropdown in the tab bar.
 ## Done when
 
 - `herdr-app check` passes for `dd-attention` and `dd-menu`.
-- With no `DD_API_KEY`, `⌘⇧E` opens the dialog and shows "Connect Datadog"
-  with "Missing: DD_API_KEY, DD_APP_KEY."
+- With no `DATADOG_PAT` (and no key pair), `⌘⇧E` opens the dialog and shows
+  "Connect Datadog" with "Missing: DATADOG_PAT."
 - `python3 dd.py --env prod --hours 1` (without keys) prints the marker line
   and then `{"fatal": "missing_keys", …}`.
 - With valid keys, the tabs show counts, and an empty tab shows the green ✓

@@ -39,7 +39,7 @@ The screenshots use made-up data.
 - `bat` (`brew install bat`) for syntax highlighting in the pull request review view;
   without it diffs show plain text.
 - Claude Code buttons: `claude` on your PATH.
-- Datadog: an API key and an Application key (see Settings).
+- Datadog: a Personal Access Token, or an API key and an Application key (see Settings).
 
 ## Install
 
@@ -137,14 +137,23 @@ az devops configure -d organization=https://dev.azure.com/my-org
 
 ### Secrets: environment variables only
 
-API keys never go in `addons.json` or this repo. The Datadog panel reads them
-from your shell environment. Add them to `~/.zshenv`, which the panel loads
-through a login shell:
+API keys and tokens never go in `addons.json` or this repo. The Datadog panel
+reads them from your shell environment. Add them to `~/.zshenv`, which the
+panel loads through a login shell:
+
+```sh
+export DATADOG_PAT=…                # Personal Settings → Personal Access Tokens
+export DATADOG_SITE=datadoghq.com   # optional: datadoghq.eu, us3.datadoghq.com, …
+```
+
+A Personal Access Token is sent as `Authorization: Bearer` (Datadog rejects a PAT
+in the `DD-API-KEY` header). Without one, the panel falls back to an API key and
+an Application key:
 
 ```sh
 export DD_API_KEY=…            # Organization Settings → API Keys
 export DD_APP_KEY=…            # Organization Settings → Application Keys
-export DD_SITE=datadoghq.com   # optional: datadoghq.eu, us3.datadoghq.com, …
+export DD_SITE=datadoghq.com   # optional
 ```
 
 The Azure DevOps mods use your `az login` and keep no tokens.
