@@ -144,9 +144,12 @@ export function mapChange(entry) {
   if (item.isFolder) return null;
   const types = (entry.changeType ?? "").split(",").map((s) => s.trim());
   const change = types.includes("rename") ? "rename" : types.find((t) => t === "add" || t === "delete" || t === "edit") ?? "edit";
-  const out = { path: item.path, change, changeTrackingId: entry.changeTrackingId };
   const old = entry.originalPath ?? entry.sourceServerItem;
-  if (old && old !== item.path) out.oldPath = old;
+  // A deleted file comes with item.path null; its path is only in originalPath.
+  const path = item.path ?? old;
+  if (!path) return null;
+  const out = { path, change, changeTrackingId: entry.changeTrackingId };
+  if (old && old !== path) out.oldPath = old;
   return out;
 }
 
