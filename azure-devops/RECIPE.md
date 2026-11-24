@@ -58,7 +58,15 @@ on hover, and their sub-lines are in 11.5px `dim`.
 **Pull requests** (`ado-prs`) is a dialog of 80% x 80%. The filters are All,
 Mine, To review and Pending, each with its count. Rows are grouped by project,
 the biggest group first. Each group header shows a chevron (click it to fold),
-the project in 12px semibold `muted` and the count. Each row, left to right:
+the project in 12px semibold `muted` and the count. Above the list, a header
+row names the columns (Title, Author, Votes, Feedback, Age, Ready) in 11px semibold
+`muted`, the sorted one in `foreground` with ▲ or ▼. Clicking a header sorts
+the rows inside each group by it, and clicking it again flips the order; the
+choice is remembered. Title and Author sort A→Z first; Votes (rejected lowest,
+then waiting for author, then by approvals) and Feedback (unresolved threads,
+then total) sort highest first; Age sorts newest first, which is the default;
+Ready sorts ready first, then waiting, then blocked (fewest blockers first).
+PRs whose comments or gates haven't loaded sort last. Each row, left to right:
 
 - a 3 x 30px lead bar: `accent` if it waits on your review, `done` if you wrote
   it, transparent otherwise
@@ -70,9 +78,17 @@ the project in 12px semibold `muted` and the count. Each row, left to right:
 - votes in a 90px column: `✓n` and `~n` in `working`, `…n` (waiting for author)
   in `done`, `✗n` in `blocked`, `○n` (no vote) in `dim`. The tooltip names every
   reviewer, marked "(required)" where it applies.
-- comments in a 64px column: `●n` unresolved in `done`, `✓n` resolved in
-  `working`, "…" while loading, "—" for none
-- the age in a 32px column (`5m`, `3h`, `2d`)
+- feedback in a 72px column: resolved / total comment threads (`2/3`), in
+  `done` while any is unresolved and `working` once all are resolved; "…"
+  while loading, "—" for none
+- the age in a 44px column (`5m`, `3h`, `2d`)
+- whether it can be completed, in a 64px column, by the same rules as the
+  review's Complete button (its policy evaluations and status checks load per
+  PR alongside the comments): "✓ Ready" in `working`; `●n` in `done` when only
+  running or pending gates or draft status block it; `✗n` in `blocked` when a
+  required gate failed, it has merge conflicts, or its gates couldn't load
+  (n = blockers, listed in the tooltip); "…" while loading, "!" on error, "—"
+  for a closed PR
 - three action icons: Review with Claude Code, Copy Slack message, Open in
   browser
 
@@ -305,13 +321,23 @@ red-tinted banner says which kind didn't load.
   list. It can also be opened with props `{review: {project, repoId, id}}`, or
   by typing an id into the PR id box in the list header.
   - Header: `#id`, title, repo, `source → target`, author and age, a
-    Publish / Mark as draft toggle, and the vote buttons: Wait for author,
+    Publish / Mark as draft toggle, a Complete button (below), and the vote buttons: Wait for author,
     Reject, Approve (Approve / Approve with suggestions) and Reset. Votes are
     10, 5, 0, -5 and -10. The current vote is highlighted. A refused write
     (a non-author toggling draft, a vote on a closed PR) shows the error and
     keeps the server's state.
     Then Refresh, Open in browser, Review with Claude Code (the same
     action as the list row's), and Close when it's a dialog.
+  - Complete: shown on active PRs. It is enabled only when the PR isn't a
+    draft, has no merge conflicts, its gates loaded, and every gate that isn't
+    optional or not applicable passes; otherwise its tooltip lists what's
+    blocking. It opens a menu: the merge type (only those the branch's "Require
+    a merge strategy" policy allows; the PR's saved choice, else the first),
+    "Delete <source> after merging" and "Complete linked work items" (both
+    on unless the PR saved otherwise), and "Complete merge". That sends the
+    source commit the view last loaded, so ADO refuses it if someone pushed
+    since. The commit message is "Merged PR <id>: <title>". On success the
+    review reloads and the list refetches.
   - Status strip: reviewer chips (vote, "required"), gate chips, and a
     "Work item #id" chip per linked item (title in the tooltip). A build
     gate opens that run in `ado-pipelines`, and a linked work item opens in

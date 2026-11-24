@@ -54,6 +54,27 @@ export function mapStatus(s) {
   return gate;
 }
 
+// Merge types in ADO's own order (its default is the first one allowed).
+export const MERGE_STRATEGIES = ["noFastForward", "squash", "rebase", "rebaseMerge"];
+const MERGE_POLICY = "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab";
+const ALLOW = { noFastForward: "allowNoFastForward", squash: "allowSquash", rebase: "allowRebase", rebaseMerge: "allowRebaseMerge" };
+
+/**
+ * Merge types the target branch allows: from an enabled "Require a merge
+ * strategy" policy among the evaluations, else all of them.
+ */
+export function allowedMergeStrategies(evaluations) {
+  const policy = (evaluations ?? []).map((e) => e.configuration ?? {})
+    .find((c) => c.isEnabled !== false && (c.type?.id === MERGE_POLICY || c.type?.displayName === "Require a merge strategy"));
+  if (!policy) return [...MERGE_STRATEGIES];
+  const s = policy.settings ?? {};
+  // Older policies only carry useSquashMerge (true: squash only).
+  const legacy = !Object.values(ALLOW).some((k) => k in s);
+  if (legacy) return s.useSquashMerge ? ["squash"] : [...MERGE_STRATEGIES];
+  const out = MERGE_STRATEGIES.filter((m) => s[ALLOW[m]]);
+  return out.length ? out : [...MERGE_STRATEGIES];
+}
+
 function latestStatuses(statuses) {
   const by = new Map();
   for (const s of statuses ?? []) {
@@ -61,6 +82,14 @@ function latestStatuses(statuses) {
     if (!by.has(k) || by.get(k).id < s.id) by.set(k, s);
   }
   return [...by.values()];
+}
+
+/** Policy evaluations + PR statuses → Gate[] (statuses: latest per context). */
+export function mapGates(evaluations, statuses, project) {
+  return [
+    ...(evaluations ?? []).map((e) => mapGate(e, project)),
+    ...latestStatuses(statuses).map(mapStatus),
+  ];
 }
 
 /**
@@ -92,11 +121,16 @@ export function mapPullRequest(pr, iterations, evaluations, statuses, workItems)
     reviewers: (pr.reviewers ?? []).map((r) => ({
       id: r.id, name: r.displayName, vote: r.vote ?? 0, required: !!r.isRequired, isGroup: !!r.isContainer,
     })),
-    gates: [
-      ...(evaluations ?? []).map((e) => mapGate(e, project)),
-      ...latestStatuses(statuses).map(mapStatus),
-    ],
+    gates: mapGates(evaluations, statuses, project),
     workItems: workItems ?? [],
+    mergeStatus: pr.mergeStatus ?? null,
+    lastMergeSourceCommit: pr.lastMergeSourceCommit?.commitId ?? null,
+    completion: {
+      strategies: allowedMergeStrategies(evaluations),
+      mergeStrategy: pr.completionOptions?.mergeStrategy ?? null,
+      deleteSourceBranch: pr.completionOptions?.deleteSourceBranch ?? null,
+      transitionWorkItems: pr.completionOptions?.transitionWorkItems ?? null,
+    },
     versions: { latest: ids.length ? ids[ids.length - 1] : null, all: ids },
   };
 }
@@ -331,13 +365,32 @@ export function createAdoProvider({ rest, org }) {
     return !!r?.isDraft;
   }
 
+  /**
+   * Complete (merge) the PR. `lastMergeSourceCommit` is the source commit the
+   * caller saw: ADO refuses the completion if someone pushed since.
+   * Returns the server's status (ADO may still be merging: "active").
+   */
+  async function complete(ref, { lastMergeSourceCommit, mergeStrategy, deleteSourceBranch, transitionWorkItems, mergeCommitMessage }) {
+    if (!lastMergeSourceCommit) throw new Error("No merge commit to complete yet; refresh and try again");
+    if (mergeStrategy && !MERGE_STRATEGIES.includes(mergeStrategy)) throw new Error(`unknown merge strategy: ${mergeStrategy}`);
+    const completionOptions = { deleteSourceBranch: !!deleteSourceBranch, transitionWorkItems: !!transitionWorkItems };
+    if (mergeStrategy) completionOptions.mergeStrategy = mergeStrategy;
+    if (mergeCommitMessage) completionOptions.mergeCommitMessage = mergeCommitMessage;
+    const r = await rest("patch", q(prBase(ref)), {
+      status: "completed",
+      lastMergeSourceCommit: { commitId: lastMergeSourceCommit },
+      completionOptions,
+    });
+    return r?.status ?? null;
+  }
+
   /** Web link to one file of a PR (as returned by getPullRequest); null without a PR link. */
   function fileUrl(pr, path) {
     return pr?.url ? `${pr.url}?_a=files&path=${enc(path)}` : null;
   }
 
   return {
-    capabilities: { votes: Object.keys(VOTES), draft: true },
-    fileUrl, me, getPullRequest, listFiles, getFileContents, listThreads, addThread, reply, setThreadStatus, vote, setDraft,
+    capabilities: { votes: Object.keys(VOTES), draft: true, complete: true },
+    fileUrl, me, getPullRequest, listFiles, getFileContents, listThreads, addThread, reply, setThreadStatus, vote, setDraft, complete,
   };
 }

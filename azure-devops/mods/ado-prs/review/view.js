@@ -12,7 +12,7 @@ import { exec, appHome, openOverlay } from "herdr";
 import { readFile, writeFile, mkdir, exists, unlink } from "fs/promises";
 import { Drafts, draftKey, prKey } from "./drafts.js";
 import {
-  myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, replyDrafts, targetLabel, ago, displayName,
+  myVote, voteLook, gateLook, gateAction, anyRunning, completeBlockers, completeDefaults, MERGE_LABELS, changeLook, threadSummary, fileDrafts, replyDrafts, targetLabel, ago, displayName,
 } from "./summary.js";
 import { ICON, button, iconButton, textAction, badge, count, section, note, centered } from "./ui/parts.js";
 import { FilePages } from "./filepage.js";
@@ -139,6 +139,8 @@ export class Review {
     this.replying = new Set(); // thread ids with an open reply box
     this.expanded = new Set(); // resolved thread ids shown expanded
     this.approveMenu = false;
+    this.completeMenu = false;
+    this.completeOpts = null; // the Complete menu's choices while it's open
     this.load(cx);
     this.poll = cx.timer.every(GATE_POLL_MS, (cx) => {
       // Reviewer-count policies sit in "running" until people vote; only builds
@@ -314,6 +316,23 @@ export class Review {
     this.write(cx, "draft", () => this.provider.setDraft(this.ref, want));
   }
 
+  // Merge the PR with the menu's choices. The view reloads either way; the list
+  // refetches so the completed PR leaves it.
+  complete(cx) {
+    const pr = this.pr;
+    const opts = this.completeOpts ?? completeDefaults(pr);
+    if (completeBlockers(pr).length) return;
+    this.completeMenu = false;
+    this.write(cx, "complete", async () => {
+      const status = await this.provider.complete(this.ref, {
+        ...opts,
+        lastMergeSourceCommit: pr.lastMergeSourceCommit,
+        mergeCommitMessage: `Merged PR ${pr.id}: ${pr.title}`,
+      });
+      if (status !== "completed") this.host.notify("Completion queued: Azure DevOps is still merging. Refresh in a moment.");
+    }, (cx) => this.host.changed?.(cx));
+  }
+
   // A comment box bound to the drafts store. Created from init/async/event
   // context only (TextareaState can't be created in render).
   composer(key, target, _cx) {
@@ -433,6 +452,7 @@ export class Review {
       .child(div().flex_1().min_w(0).truncate().text_size(14).font_semibold().text_color(t.foreground)
         .child(pr?.title ?? (this.error ? "" : "Loading…")))
       .when(Boolean(pr && this.provider.capabilities.draft), (el) => el.child(this.draftToggle(t)))
+      .when(Boolean(pr?.status === "active" && this.provider.capabilities.complete), (el) => el.child(this.completeButton(t)))
       .child(iconButton(t, "rv-refresh", "refresh", "Refresh", (_e, cx) => this.load(cx), { spin: this.loading }))
       .when(Boolean(pr?.url), (el) => el.child(iconButton(t, "rv-open", "external", "Open in browser", () => this.browse(pr.url))))
       .children(this.host.chrome?.(t, pr) ?? []);
@@ -453,6 +473,48 @@ export class Review {
       disabled: busy,
       tip: pr.isDraft ? "Draft: publish it so reviewers are notified" : "Published: turn it back into a draft",
     });
+  }
+
+  // Complete: enabled once every required gate passes; opens a menu with the
+  // merge type and the post-merge options, and its own Complete button merges.
+  completeButton(t) {
+    const pr = this.pr;
+    const busy = this.busy.has("complete");
+    const blockers = completeBlockers(pr);
+    if (busy || blockers.length) {
+      return button(t, "rv-complete", busy ? "Completing…" : "Complete", null, {
+        disabled: true, plain: true, tip: busy ? "Completing…" : `Can't complete yet:\n${blockers.join("\n")}`,
+      });
+    }
+    const o = this.completeOpts ?? completeDefaults(pr);
+    const set = (patch) => (_e, cx) => { this.completeOpts = { ...o, ...patch }; cx.notify(); };
+    const strategies = pr.completion?.strategies?.length ? pr.completion.strategies : Object.keys(MERGE_LABELS);
+    const choice = (id, on, label, onClick) => h_flex().id(id).px(10).py(5).gap(8).items_center().rounded(4).text_size(12).cursor_pointer()
+      .text_color(on ? t.foreground : t.muted)
+      .hover((s) => s.bg(t.hover)).on_click(onClick)
+      .child(div().flex_none().w(12).text_color(on ? t.accent : t.dim).child(on ? "●" : "○"))
+      .child(label);
+    const toggle = (id, on, label, key) => h_flex().id(id).px(10).py(5).gap(8).items_center().rounded(4).text_size(12).cursor_pointer()
+      .text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click(set({ [key]: !on }))
+      .child(div().flex_none().w(12).text_color(on ? t.accent : t.dim).child(on ? "☑" : "☐"))
+      .child(label);
+    return Popover.new("rv-complete-menu")
+      .anchor("top_right")
+      .open(this.completeMenu)
+      .on_open_change((open, cx) => {
+        this.completeMenu = open;
+        if (open) this.completeOpts = completeDefaults(this.pr);
+        cx.notify();
+      })
+      .trigger(button(t, "rv-complete", "Complete ▾", null, { primary: true, plain: true, tip: "All required gates pass" }))
+      .content(v_flex().p(4).gap(2).min_w(260).rounded(8).border(1).border_color(t.border).bg(t.raised)
+        .child(div().px(10).pt(4).pb(2).text_size(11).font_semibold().text_color(t.muted).child("Merge type"))
+        .children(strategies.map((m) => choice(`rv-merge-${m}`, o.mergeStrategy === m, MERGE_LABELS[m] ?? m, set({ mergeStrategy: m }))))
+        .child(div().mx(10).my(4).h(1).bg(t.border))
+        .child(toggle("rv-c-delete", o.deleteSourceBranch, `Delete ${pr.source} after merging`, "deleteSourceBranch"))
+        .child(toggle("rv-c-wi", o.transitionWorkItems, "Complete linked work items", "transitionWorkItems"))
+        .child(h_flex().px(10).pt(6).pb(4).justify_end()
+          .child(button(t, "rv-complete-go", "Complete merge", (_e, cx) => this.complete(cx), { primary: true }))));
   }
 
   votes(t) {
