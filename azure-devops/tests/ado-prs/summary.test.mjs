@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   myVote, voteLook, gateLook, gateAction, anyRunning, changeLook, threadSummary, fileDrafts, targetLabel, ago, displayName, replyDrafts,
+  completeBlockers, completeDefaults, readiness,
 } from "../../mods/ado-prs/review/summary.js";
 
 const R = (id, vote) => ({ id, name: id, vote, required: false, isGroup: false });
@@ -112,4 +113,44 @@ test("ago and displayName", () => {
   assert.equal(ago(undefined, now), "");
   assert.equal(displayName("[Billing]\\Core team"), "Core team");
   assert.equal(displayName("Dana Ortiz"), "Dana Ortiz");
+});
+
+const G = (name, state, optional = false) => ({ id: name, name, state, kind: "policy", optional });
+const OPEN_PR = { status: "active", isDraft: false, mergeStatus: "succeeded", gates: [] };
+
+test("completeBlockers: empty when every required gate passes", () => {
+  assert.deepEqual(completeBlockers(OPEN_PR), []);
+  assert.deepEqual(completeBlockers({ ...OPEN_PR, gates: [G("Build", "pass"), G("Lint", "fail", true), G("WI", "notApplicable")] }), []);
+});
+
+test("completeBlockers: names each failing, running or pending required gate", () => {
+  const pr = { ...OPEN_PR, gates: [G("Build", "fail"), G("Reviewers", "running"), G("Check", "pending"), G("OK", "pass")] };
+  assert.deepEqual(completeBlockers(pr), ["Build: failed", "Reviewers: not passed yet", "Check: pending"]);
+});
+
+test("completeBlockers: closed, draft, conflicts, unknown gates", () => {
+  assert.deepEqual(completeBlockers({ ...OPEN_PR, status: "completed" }), ["Already completed"]);
+  assert.deepEqual(completeBlockers({ ...OPEN_PR, isDraft: true, mergeStatus: "conflicts", gatesError: "boom" }),
+    ["It's a draft: publish it first", "Merge conflicts", "Gates unavailable: boom"]);
+  assert.deepEqual(completeBlockers(null), ["Loading"]);
+});
+
+test("completeDefaults: the PR's saved options when allowed, else ADO defaults", () => {
+  const strategies = ["noFastForward", "squash", "rebase", "rebaseMerge"];
+  assert.deepEqual(completeDefaults({ completion: { strategies, mergeStrategy: null, deleteSourceBranch: null, transitionWorkItems: null } }),
+    { mergeStrategy: "noFastForward", deleteSourceBranch: true, transitionWorkItems: true });
+  assert.deepEqual(completeDefaults({ completion: { strategies, mergeStrategy: "squash", deleteSourceBranch: false, transitionWorkItems: false } }),
+    { mergeStrategy: "squash", deleteSourceBranch: false, transitionWorkItems: false });
+  assert.equal(completeDefaults({ completion: { strategies: ["rebase"], mergeStrategy: "squash" } }).mergeStrategy, "rebase");
+});
+
+test("readiness: ready / waiting / blocked / closed", () => {
+  assert.deepEqual(readiness({ ...OPEN_PR, gates: [G("Build", "pass")] }), { state: "ready", blockers: [] });
+  assert.equal(readiness({ ...OPEN_PR, gates: [G("Build", "running")] }).state, "waiting");
+  assert.equal(readiness({ ...OPEN_PR, isDraft: true }).state, "waiting");
+  assert.equal(readiness({ ...OPEN_PR, gates: [G("Build", "fail"), G("Reviewers", "running")] }).state, "blocked");
+  assert.equal(readiness({ ...OPEN_PR, gates: [G("Lint", "fail", true)] }).state, "ready");
+  assert.equal(readiness({ ...OPEN_PR, mergeStatus: "conflicts" }).state, "blocked");
+  assert.equal(readiness({ ...OPEN_PR, gatesError: "x" }).state, "blocked");
+  assert.deepEqual(readiness({ status: "completed" }), { state: "closed", blockers: ["Already completed"] });
 });

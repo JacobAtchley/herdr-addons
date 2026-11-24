@@ -15,6 +15,9 @@ import { readFile } from "fs/promises";
 import { Review } from "./review/view.js";
 import { createAdoProvider } from "./review/providers/ado.js";
 import { rest } from "./review/azrest.js";
+import { mapGates } from "./review/providers/ado.js";
+import { readiness } from "./review/summary.js";
+import { COLUMNS, parseSort, formatSort, nextSort, sortPrs } from "./sort.js";
 
 // Settings from addons.json in the herdr-app folder (see the herdr-addons
 // README). Read on each use, so edits apply without reloading the mod.
@@ -58,10 +61,15 @@ const FILTERS = [
 // Trim the payload: descriptions and links are large and unused.
 const QUERY =
   "value[].{id:pullRequestId,title:title,draft:isDraft,created:creationDate,source:sourceRefName,target:targetRefName," +
-  "merge:mergeStatus,repo:repository.name,repoId:repository.id,project:repository.project.name,author:createdBy.displayName," +
+  "merge:mergeStatus,repo:repository.name,repoId:repository.id,project:repository.project.name,projectId:repository.project.id,author:createdBy.displayName," +
   "authorMail:createdBy.uniqueName,reviewers:reviewers[].{name:displayName,mail:uniqueName,vote:vote,group:isContainer,required:isRequired}}";
 // The same fields for one PR from the by-id call, plus its status (active, completed, abandoned).
 const ONE_QUERY = QUERY.replace(/^value\[\]\.\{/, "{status:status,");
+
+// List column widths (the title takes the rest); the header row uses the same.
+const COL_W = { author: 140, votes: 90, feedback: 72, age: 44, ready: 64 };
+// Three 24px action icons with 2px gaps.
+const ACTIONS_W = 76;
 
 const AZ = ["az", "/opt/homebrew/bin/az", "/usr/local/bin/az"];
 
@@ -98,7 +106,9 @@ export default class AdoPrs extends View {
     this.me = null;
     this.filter = localStorage.getItem("filter") ?? "all";
     this.folded = {};
+    this.sort = parseSort(localStorage.getItem("sort"));
     this.threads = {}; // pr id → { resolved, open }
+    this.ready = {}; // pr id → { state, blockers } | { error }
     this.search = InputState.new({ placeholder: "Filter by title, repo, author, branch…" });
     this.search.on("change", (_e, cx) => cx.notify());
     this.lookup = null; // { id, loading } | { id, pr } | { id, error }
@@ -147,6 +157,8 @@ export default class AdoPrs extends View {
         cx.notify();
       },
       notify: (msg) => notify({ title: "Pull request", body: msg, level: "error" }),
+      // A write that changes the list (a completed PR): refetch it.
+      changed: (cx) => this.refresh(cx),
       // Header buttons after the view's own: Review with Claude Code (as on the
       // list's rows), and Close when this is a dialog.
       chrome: (t, pr) => [
@@ -223,35 +235,71 @@ export default class AdoPrs extends View {
     });
   }
 
-  // Resolved vs unresolved comment threads, a few PRs at a time; rows fill in as they arrive.
+  // Per PR, a few at a time (rows fill in as they arrive): resolved vs
+  // unresolved comment threads, and whether it can be completed (gates).
   async loadThreads(cx, prs = this.prs) {
     const queue = [...(prs ?? [])];
     const worker = async () => {
       for (let pr; (pr = queue.shift()); ) {
-        const url = `https://dev.azure.com/${this.org}/${encodeURIComponent(pr.project)}/_apis/git/repositories/${pr.repoId}/pullRequests/${pr.id}/threads?api-version=7.1`;
-        try {
-          const states = JSON.parse(await az(["rest", "--resource", ADO_RESOURCE, "-u", url, "--query", THREAD_QUERY, "-o", "json"])) ?? [];
-          const resolved = states.filter((s) => RESOLVED.has(s)).length;
-          this.threads[pr.id] = { resolved, open: states.length - resolved };
-        } catch (e) {
-          this.threads[pr.id] = { error: String(e?.message ?? e) };
-        }
+        await Promise.all([this.loadComments(pr), this.loadReady(pr)]);
         cx.notify();
       }
     };
     await Promise.all(Array.from({ length: THREAD_CONCURRENCY }, worker));
   }
 
-  // ● unresolved · ✓ resolved
+  async loadComments(pr) {
+    const url = `https://dev.azure.com/${this.org}/${encodeURIComponent(pr.project)}/_apis/git/repositories/${pr.repoId}/pullRequests/${pr.id}/threads?api-version=7.1`;
+    try {
+      const states = JSON.parse(await az(["rest", "--resource", ADO_RESOURCE, "-u", url, "--query", THREAD_QUERY, "-o", "json"])) ?? [];
+      const resolved = states.filter((s) => RESOLVED.has(s)).length;
+      this.threads[pr.id] = { resolved, open: states.length - resolved };
+    } catch (e) {
+      this.threads[pr.id] = { error: String(e?.message ?? e) };
+    }
+  }
+
+  // The same gates and completion rules as the review view's Complete button.
+  async loadReady(pr) {
+    if (pr.status && pr.status !== "active") { this.ready[pr.id] = readiness(pr); return; }
+    const enc = encodeURIComponent;
+    const base = `https://dev.azure.com/${this.org}/${enc(pr.project)}/_apis`;
+    try {
+      const [ev, st] = await Promise.all([
+        rest("get", `${base}/policy/evaluations?artifactId=${enc(`vstfs:///CodeReview/CodeReviewId/${pr.projectId}/${pr.id}`)}&api-version=7.1-preview.1`),
+        rest("get", `${base}/git/repositories/${pr.repoId}/pullRequests/${pr.id}/statuses?api-version=7.1-preview.1`),
+      ]);
+      this.ready[pr.id] = readiness({
+        status: "active", isDraft: !!pr.draft, mergeStatus: pr.merge, gates: mapGates(ev?.value, st?.value, pr.project),
+      });
+    } catch (e) {
+      this.ready[pr.id] = { error: String(e?.message ?? e) };
+    }
+  }
+
+  // ✓ ready to complete · ● waiting on gates (or a draft) · ✗ blocked · — closed
+  readyCell(t, pr, key = "pr") {
+    const r = this.ready[pr.id];
+    const box = h_flex().id(`rd-${key}-${pr.id}`).flex_none().w(COL_W.ready).gap(4).text_size(11.5);
+    if (!r) return box.child(div().text_color(t.dim).child("…"));
+    if (r.error) return box.tooltip(`Couldn't load gates: ${r.error}`).child(div().text_color(t.blocked).child("!"));
+    if (r.state === "closed") return box.tooltip(r.blockers[0]).child(div().text_color(t.dim).child("—"));
+    if (r.state === "ready") return box.tooltip("Every required gate passes: ready to complete").child(div().text_color(t.working).child("✓ Ready"));
+    const tip = `Can't complete yet:\n${r.blockers.join("\n")}`;
+    const [glyph, color] = r.state === "blocked" ? ["✗", t.blocked] : ["●", t.done];
+    return box.tooltip(tip).child(div().text_color(color).child(`${glyph}${r.blockers.length}`));
+  }
+
+  // resolved/total threads: `working` when all are resolved, `done` while any is open.
   comments(t, pr, key = "pr") {
     const c = this.threads[pr.id];
-    const box = h_flex().id(`c-${key}-${pr.id}`).flex_none().w(64).gap(6).text_size(11.5);
+    const box = h_flex().id(`c-${key}-${pr.id}`).flex_none().w(COL_W.feedback).gap(6).text_size(11.5);
     if (!c) return box.child(div().text_color(t.dim).child("…"));
     if (c.error) return box.tooltip(`Couldn't load comments: ${c.error}`).child(div().text_color(t.blocked).child("!"));
-    if (!c.open && !c.resolved) return box.tooltip("No comments").child(div().text_color(t.dim).child("—"));
-    return box.tooltip(`${c.open} unresolved · ${c.resolved} resolved`)
-      .when(c.open > 0, (el) => el.child(div().text_color(t.done).child(`●${c.open}`)))
-      .when(c.resolved > 0, (el) => el.child(div().text_color(t.working).child(`✓${c.resolved}`)));
+    const total = c.open + c.resolved;
+    if (!total) return box.tooltip("No comments").child(div().text_color(t.dim).child("—"));
+    return box.tooltip(`${c.resolved} of ${total} threads resolved · ${c.open} unresolved`)
+      .child(div().text_color(c.open ? t.done : t.working).child(`${c.resolved}/${total}`));
   }
 
   // The host is closing this copy: write any pending comment draft now.
@@ -386,17 +434,42 @@ export default class AdoPrs extends View {
           .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(pr.draft ? t.muted : t.foreground).child(pr.title)))
         .child(div().truncate().text_size(11.5).text_color(t.dim)
           .child(`${pr.repo} · !${pr.id} · ${branch(pr.source)} → ${branch(pr.target)}`)))
-      .child(div().flex_none().w(140).truncate().text_size(12).text_color(t.muted).child(pr.author ?? ""))
-      .child(div().flex_none().w(90).child(this.votes(t, pr, key)))
+      .child(div().flex_none().w(COL_W.author).truncate().text_size(12).text_color(t.muted).child(pr.author ?? ""))
+      .child(div().flex_none().w(COL_W.votes).child(this.votes(t, pr, key)))
       .child(this.comments(t, pr, key))
-      .child(div().flex_none().w(32).text_size(11.5).text_color(t.dim).child(ago(pr.created)))
-      .child(h_flex().flex_none().gap(2)
+      .child(div().flex_none().w(COL_W.age).text_size(11.5).text_color(t.dim).child(ago(pr.created)))
+      .child(this.readyCell(t, pr, key))
+      .child(h_flex().flex_none().w(ACTIONS_W).gap(2)
         .child(this.action(t, `rv-${key}-${pr.id}`, "review.svg", "Review with Claude Code", () => this.claudeReview(pr)))
         .child(this.action(t, `sl-${key}-${pr.id}`, "slack.svg", "Copy Slack message", (cx) => {
           cx.write_to_clipboard(this.slackText(pr));
           notify({ title: "Slack message copied", body: `!${pr.id} ${pr.title}`, level: "info", timeout: 2000 });
         }))
         .child(this.action(t, `op-${key}-${pr.id}`, "external.svg", "Open in browser", () => this.open(pr))));
+  }
+
+  // Sortable column headers, lined up with the rows' columns (list padding 8 + row padding 12).
+  columns(t) {
+    const cell = (c) => {
+      const active = this.sort.key === c.key;
+      const arrow = active ? (this.sort.dir === "asc" ? " ▲" : " ▼") : "";
+      let el = div().id(`col-${c.key}`).cursor_pointer().truncate().text_size(11).font_semibold()
+        .text_color(active ? t.foreground : t.muted)
+        .rounded(4).hover((s) => s.bg(t.hover))
+        .tooltip(`Sort by ${c.label.toLowerCase()}`)
+        .on_click((_e, cx) => {
+          this.sort = nextSort(this.sort, c.key);
+          localStorage.setItem("sort", formatSort(this.sort));
+          cx.notify();
+        })
+        .child(`${c.label}${arrow}`);
+      el = c.key === "title" ? el.flex_1().min_w(0) : el.flex_none().w(COL_W[c.key]);
+      return el;
+    };
+    return h_flex().flex_none().px(20).pt(6).pb(4).gap(12).items_center().border_b(1).border_color(t.border)
+      .child(div().flex_none().w(3))
+      .children(COLUMNS.map(cell))
+      .child(div().flex_none().w(ACTIONS_W));
   }
 
   action(t, id, icon, tip, fn) {
@@ -471,9 +544,9 @@ export default class AdoPrs extends View {
       groups.get(pr.project).push(pr);
     }
     const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
-    return div().id("list").flex_1().min_h(0).overflow_y_scrollbar().child(v_flex().p(8).gap(6).children(
-      sorted.map(([project, prs]) => {
-        prs.sort((a, b) => Date.parse(b.created) - Date.parse(a.created));
+    const scroll = div().id("list").flex_1().min_h(0).overflow_y_scrollbar().child(v_flex().p(8).gap(6).children(
+      sorted.map(([project, unsorted]) => {
+        const prs = sortPrs(unsorted, this.sort, { threads: this.threads, ready: this.ready });
         const folded = this.folded[project];
         return v_flex().flex_none().gap(1)
           .child(h_flex().id(`g-${project}`).px(8).py(4).gap(8).items_center().rounded(6).cursor_pointer()
@@ -485,6 +558,7 @@ export default class AdoPrs extends View {
           .when(!folded, (el) => el.children(prs.map((pr) => this.row(t, pr))));
       }),
     ));
+    return v_flex().flex_1().min_h(0).child(this.columns(t)).child(scroll);
   }
 
   render() {

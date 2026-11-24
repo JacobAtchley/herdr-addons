@@ -19,7 +19,13 @@ export function voteName(n) {
  * @typedef {{id: number, url: string, title: string, description: string, repo: string, project: string,
  *   projectId: string, source: string, target: string, author: {name: string, id: string}, created: string,
  *   isDraft: boolean, status: string, reviewers: Reviewer[], gates: Gate[], workItems: WorkItem[],
- *   versions: {latest: number, all: number[]}}} PullRequest
+ *   versions: {latest: number, all: number[]}, mergeStatus: string|null, lastMergeSourceCommit: string|null,
+ *   completion: Completion}} PullRequest
+ * @typedef {{strategies: MergeStrategy[], mergeStrategy: MergeStrategy|null, deleteSourceBranch: boolean|null,
+ *   transitionWorkItems: boolean|null}} Completion  allowed merge types and the PR's saved completion options
+ * @typedef {'noFastForward'|'squash'|'rebase'|'rebaseMerge'} MergeStrategy
+ * @typedef {{lastMergeSourceCommit: string, mergeStrategy?: MergeStrategy, deleteSourceBranch: boolean,
+ *   transitionWorkItems: boolean, mergeCommitMessage?: string}} CompleteOptions
  * @typedef {{path: string, oldPath?: string, change: 'add'|'edit'|'delete'|'rename', binary?: boolean,
  *   changeTrackingId?: number}} FileChange
  * @typedef {{id: number, author: string, body: string, created: string, isMine: boolean}} Comment
@@ -30,7 +36,7 @@ export function voteName(n) {
  * @typedef {{file: string, side: 'left'|'right', line: number, endLine?: number, lineLength?: number,
  *   endLineLength?: number} | {general: true}} CommentTarget
  * @typedef {{
- *   capabilities: {votes: string[], draft: boolean},
+ *   capabilities: {votes: string[], draft: boolean, complete: boolean},
  *   fileUrl(pr: PullRequest, path: string): string|null,
  *   me(): Promise<{id: string, name: string}>,
  *   getPullRequest(ref: Ref): Promise<PullRequest>,
@@ -42,5 +48,6 @@ export function voteName(n) {
  *   setThreadStatus(ref: Ref, threadId: number, status: string): Promise<Thread>,
  *   vote(ref: Ref, key: string): Promise<number>,
  *   setDraft(ref: Ref, isDraft: boolean): Promise<boolean>,
+ *   complete(ref: Ref, opts: CompleteOptions): Promise<string|null>,
  * }} Provider
  */

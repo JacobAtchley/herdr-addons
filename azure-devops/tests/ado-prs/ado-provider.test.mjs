@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { VOTES, voteName } from "../../mods/ado-prs/review/model.js";
 import {
   createAdoProvider, mapPullRequest, mapGate, mapStatus, mapThreads, mapChange, buildThreadContext,
+  allowedMergeStrategies, MERGE_STRATEGIES, mapGates,
 } from "../../mods/ado-prs/review/providers/ado.js";
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"));
@@ -390,5 +391,47 @@ test("vote rejects propagate", async () => {
 
 test("capabilities", () => {
   const p = createAdoProvider({ rest: async () => null, org: "o" });
-  assert.deepEqual(p.capabilities, { votes: Object.keys(VOTES), draft: true });
+  assert.deepEqual(p.capabilities, { votes: Object.keys(VOTES), draft: true, complete: true });
+});
+
+test("mapPullRequest: completion data", () => {
+  const m = mapPullRequest(pr, iterations, evals, statuses, []);
+  assert.equal(m.mergeStatus, "succeeded");
+  assert.equal(m.lastMergeSourceCommit, pr.lastMergeSourceCommit.commitId);
+  assert.deepEqual(m.completion, { strategies: MERGE_STRATEGIES, mergeStrategy: null, deleteSourceBranch: null, transitionWorkItems: null });
+  const saved = mapPullRequest({ ...pr, completionOptions: { mergeStrategy: "squash", deleteSourceBranch: true } }, iterations, [], [], []);
+  assert.equal(saved.completion.mergeStrategy, "squash");
+  assert.equal(saved.completion.deleteSourceBranch, true);
+});
+
+test("allowedMergeStrategies follows the merge strategy policy", () => {
+  const policy = (settings, extra = {}) => ({ configuration: { isEnabled: true, type: { id: "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab", displayName: "Require a merge strategy" }, settings, ...extra } });
+  assert.deepEqual(allowedMergeStrategies(evals), MERGE_STRATEGIES);
+  assert.deepEqual(allowedMergeStrategies([policy({ allowSquash: true, allowRebase: true, allowNoFastForward: false })]), ["squash", "rebase"]);
+  assert.deepEqual(allowedMergeStrategies([policy({ useSquashMerge: true })]), ["squash"]);
+  assert.deepEqual(allowedMergeStrategies([policy({ useSquashMerge: false })]), MERGE_STRATEGIES);
+  assert.deepEqual(allowedMergeStrategies([{ configuration: { ...policy({ allowSquash: true }).configuration, isEnabled: false } }]), MERGE_STRATEGIES);
+});
+
+test("complete patches status, the seen source commit and completion options", async () => {
+  const { rest, calls } = fakeRest([[(m) => m === "patch", () => ({ ...pr, status: "completed" })]]);
+  const p = createAdoProvider({ rest, org: "contoso-demo" });
+  const status = await p.complete(ref, {
+    lastMergeSourceCommit: "abc", mergeStrategy: "squash", deleteSourceBranch: true, transitionWorkItems: false, mergeCommitMessage: "Merged PR 482: x",
+  });
+  assert.equal(status, "completed");
+  const c = calls.find((c) => c.method === "patch");
+  assert.equal(c.url.split("?")[0], PR_BASE);
+  assert.deepEqual(c.body, {
+    status: "completed",
+    lastMergeSourceCommit: { commitId: "abc" },
+    completionOptions: { deleteSourceBranch: true, transitionWorkItems: false, mergeStrategy: "squash", mergeCommitMessage: "Merged PR 482: x" },
+  });
+  await assert.rejects(p.complete(ref, { lastMergeSourceCommit: null }), /refresh/);
+  await assert.rejects(p.complete(ref, { lastMergeSourceCommit: "abc", mergeStrategy: "octopus" }), /unknown merge strategy/);
+});
+
+test("mapGates matches mapPullRequest's gates", () => {
+  assert.deepEqual(mapGates(evals, statuses, "Billing"), mapPullRequest(pr, iterations, evals, statuses, []).gates);
+  assert.deepEqual(mapGates(null, null, "Billing"), []);
 });

@@ -40,6 +40,56 @@ export function gateAction(gate) {
   return { kind: "info" };
 }
 
+/**
+ * Why the PR can't be completed yet; empty when it can. Every gate that isn't
+ * optional or not applicable must pass.
+ */
+export function completeBlockers(pr) {
+  if (!pr) return ["Loading"];
+  if (pr.status !== "active") return [`Already ${pr.status}`];
+  const out = [];
+  if (pr.isDraft) out.push("It's a draft: publish it first");
+  if (pr.mergeStatus === "conflicts") out.push("Merge conflicts");
+  if (pr.gatesError) out.push(`Gates unavailable: ${pr.gatesError}`);
+  for (const g of pr.gates ?? []) {
+    if (g.optional || g.state === "notApplicable" || g.state === "pass") continue;
+    out.push(`${g.name}: ${g.state === "running" ? "not passed yet" : g.state === "fail" ? "failed" : "pending"}`);
+  }
+  return out;
+}
+
+/**
+ * One word for the list's Ready column: "ready" (can complete now), "blocked"
+ * (a required gate failed, merge conflicts, or gates couldn't load),
+ * "waiting" (only drafts and gates still running or pending), "closed".
+ */
+export function readiness(pr) {
+  if (pr?.status && pr.status !== "active") return { state: "closed", blockers: [`Already ${pr.status}`] };
+  const blockers = completeBlockers(pr);
+  if (!blockers.length) return { state: "ready", blockers };
+  const failed = pr.mergeStatus === "conflicts" || !!pr.gatesError ||
+    (pr.gates ?? []).some((g) => !g.optional && g.state === "fail");
+  return { state: failed ? "blocked" : "waiting", blockers };
+}
+
+export const MERGE_LABELS = {
+  noFastForward: "Merge (no fast-forward)",
+  squash: "Squash commit",
+  rebase: "Rebase and fast-forward",
+  rebaseMerge: "Semi-linear merge",
+};
+
+/** Starting choices for the Complete menu: the PR's saved options, else ADO's defaults. */
+export function completeDefaults(pr) {
+  const c = pr?.completion ?? {};
+  const strategies = c.strategies?.length ? c.strategies : Object.keys(MERGE_LABELS);
+  return {
+    mergeStrategy: strategies.includes(c.mergeStrategy) ? c.mergeStrategy : strategies[0],
+    deleteSourceBranch: c.deleteSourceBranch ?? true,
+    transitionWorkItems: c.transitionWorkItems ?? true,
+  };
+}
+
 export const anyRunning = (gates) => (gates ?? []).some((g) => g.state === "running");
 
 const CHANGE_LOOK = {
